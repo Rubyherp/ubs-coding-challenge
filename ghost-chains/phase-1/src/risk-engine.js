@@ -1,5 +1,4 @@
 import { DirectedGraph } from "./directed-graph.js";
-import { combineIdentityRisk, IdentityState } from "./identity-state.js";
 import { TransactionHeap } from "./min-heap.js";
 import {
   applyTemporalEdge,
@@ -40,7 +39,6 @@ export class RiskEngine {
   #ledger = new Map();
   #activeRecords = new Map();
   #temporal = new TemporalState();
-  #identity = new IdentityState();
   #watermarkNs = null;
   #sequence = 0;
 
@@ -88,20 +86,14 @@ export class RiskEngine {
           riskScore = jitterActiveRisk(riskScore, transaction.txId);
         }
 
-        const identityEvidence = this.#identity.analyze(transaction, this.#graph);
-        riskScore = combineIdentityRisk(riskScore, identityEvidence.hazard);
-
         const sequence = this.#sequence++;
         const record = {
           createdAtNs: transaction.createdAtNs,
           sequence,
           from: transaction.fromUserId,
-          to: transaction.toUserId,
-          ipAddress: transaction.ipAddress,
-          deviceId: transaction.deviceId
+          to: transaction.toUserId
         };
         this.#graph.addEdge(transaction.fromUserId, transaction.toUserId);
-        this.#identity.add(record);
         this.#activeRecords.set(sequence, record);
         this.#expirations.push(record);
       }
@@ -119,7 +111,6 @@ export class RiskEngine {
     this.#ledger.clear();
     this.#activeRecords.clear();
     this.#temporal = new TemporalState();
-    this.#identity.clear();
     this.#watermarkNs = null;
     this.#sequence = 0;
   }
@@ -152,7 +143,6 @@ export class RiskEngine {
       while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs <= cutoff) {
         const expired = this.#expirations.pop();
         this.#graph.removeEdge(expired.from, expired.to);
-        this.#identity.remove(expired);
         this.#activeRecords.delete(expired.sequence);
         removed = true;
       }

@@ -1,16 +1,19 @@
 {
-  "name": "ghost-chains",
+  "name": "ghost-chains-phases",
   "version": "1.0.0",
   "private": true,
-  "description": "Stateful streaming transaction risk scorer for Ghost Chains",
-  "type": "module",
+  "description": "Cumulative Ghost Chains phase implementations",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "test": "node --test",
-    "test:coverage": "node --test --experimental-test-coverage",
-    "check": "node --check src/server.js && node --check src/api.js && node --check src/risk-engine.js && node --test"
+    "start": "npm --prefix phase-2 start",
+    "start:phase-1": "npm --prefix phase-1 start",
+    "start:phase-2": "npm --prefix phase-2 start",
+    "test": "npm --prefix phase-1 test && npm --prefix phase-2 test",
+    "test:phase-1": "npm --prefix phase-1 test",
+    "test:phase-2": "npm --prefix phase-2 test",
+    "check": "npm --prefix phase-1 run check && npm --prefix phase-2 run check",
+    "test:coverage": "npm --prefix phase-1 run test:coverage && npm --prefix phase-2 run test:coverage"
   }
 }

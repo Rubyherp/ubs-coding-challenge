@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { RiskEngine } from "../src/risk-engine.js";
-import { normalizeTransaction } from "../src/transaction.js";
+import { normalizeTransaction } from "../../phase-1/src/transaction.js";
 
 function tx(index, from, to, identity = {}) {
   return normalizeTransaction({

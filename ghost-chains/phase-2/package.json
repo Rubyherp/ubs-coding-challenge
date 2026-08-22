@@ -1,0 +1,16 @@
+{
+  "name": "ghost-chains-phase-2",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stateful streaming transaction risk scorer for Ghost Chains",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "check": "node --check src/server.js && node --check src/api.js && node --check src/risk-engine.js && node --test"
+  }
+}
