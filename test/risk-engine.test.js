@@ -115,13 +115,13 @@ test("a conflict with a previously accepted ID also leaves state unchanged", () 
   assert.deepEqual(engine.diagnostics(), before);
 });
 
-test("transactions exactly 24 hours old remain active", () => {
+test("transactions exactly 24 hours old are outside the window", () => {
   const engine = new RiskEngine();
   const isolated = engine.processBatch([transaction("old", "a", "b", "2026-06-08T00:00:00Z")])[0];
   const boundary = engine.processBatch([transaction("boundary", "b", "c", "2026-06-09T00:00:00Z")])[0];
 
-  assert.ok(boundary.riskScore > isolated.riskScore);
-  assert.equal(engine.diagnostics().activeTransactions, 2);
+  assert.equal(boundary.riskScore, isolated.riskScore);
+  assert.equal(engine.diagnostics().activeTransactions, 1);
 });
 
 test("transactions older than 24 hours by one nanosecond expire", () => {

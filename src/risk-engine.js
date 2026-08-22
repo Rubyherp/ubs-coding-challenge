@@ -34,9 +34,9 @@ export class RiskEngine {
       const cutoff = this.#watermarkNs - LOOKBACK_NS;
       let riskScore = 0;
 
-      // Keep the exact lower boundary active. Expiration begins once an edge
-      // is strictly more than 24 hours behind the event-time watermark.
-      if (transaction.createdAtNs >= cutoff) {
+      // The active interval is (watermark - 24h, watermark]. An event on the
+      // exact lower boundary has left the rolling lookback window.
+      if (transaction.createdAtNs > cutoff) {
         const features = this.#graph.analyzeEdge(transaction.fromUserId, transaction.toUserId);
         riskScore = scoreFeatures(features);
         this.#graph.addEdge(transaction.fromUserId, transaction.toUserId);
@@ -87,7 +87,7 @@ export class RiskEngine {
     if (this.#watermarkNs === null || createdAtNs > this.#watermarkNs) {
       this.#watermarkNs = createdAtNs;
       const cutoff = this.#watermarkNs - LOOKBACK_NS;
-      while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs < cutoff) {
+      while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs <= cutoff) {
         const expired = this.#expirations.pop();
         this.#graph.removeEdge(expired.from, expired.to);
       }

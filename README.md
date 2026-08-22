@@ -40,7 +40,7 @@ The weighted signal is clamped and rounded to a deterministic score in `[0, 1]`.
 
 - Arrival order defines state evolution, including for out-of-order timestamps.
 - The maximum `createdAt` seen is the event-time watermark.
-- An edge is active when `createdAt >= watermark - 24 hours`; expiration starts once it is strictly older than 24 hours.
+- An edge is active when `createdAt > watermark - 24 hours`; the rolling window is `(watermark - 24h, watermark]`.
 - A late transaction older than the current window receives a neutral score and does not mutate the active graph.
 - Active edges are held in a timestamp min-heap and expired incrementally. Parallel edges expire independently.
 - RFC 3339 timestamps are parsed at nanosecond precision, including numeric UTC offsets.
