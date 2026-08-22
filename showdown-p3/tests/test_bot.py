@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+import random
+import unittest
+
+from bot import (
+    OPPONENTS,
+    _amount,
+    _future_forced_cost,
+    _is_clearing,
+    _multiway_equity,
+    _objective_target,
+    _opponents,
+    _reset_learning_for_tests,
+    decide,
+    decision_diagnostics,
+)
+from rule_model import RULES
+
+
+NAMES = ("you", "Dana", "Miles", "Theo", "Rhea", "Bram")
+
+
+def players(hero_delta=0, other_deltas=None):
+    deltas = [hero_delta] + list(other_deltas or [0] * 5)
+    return [
+        {
+            "seat": seat,
+            "name": name,
+            "folded": False,
+            "chip_delta": deltas[seat],
+            "bet_this_round": 0,
+            "stack": 200 + deltas[seat],
+            "all_in": False,
+            "busted": False,
+        }
+        for seat, name in enumerate(NAMES)
+    ]
+
+
+def request(**overrides):
+    data = {
+        "protocol_version": 2,
+        "match_id": "phase3-test",
+        "phase": 3,
+        "table_rule": "verdigris",
+        "leg_number": 1,
+        "total_legs": 4,
+        "small_blind": 1,
+        "big_blind": 2,
+        "starting_stack": 200,
+        "your_stack": 200,
+        "hand_number": 1,
+        "total_hands": 60,
+        "round": "pre_reveal",
+        "your_number": 7,
+        "community_number": None,
+        "your_seat": 0,
+        "button_seat": 5,
+        "pot": 3,
+        "to_call": 0,
+        "min_raise_to": 4,
+        "max_raise_to": 200,
+        "legal_actions": ["check", "raise"],
+        "players": players(),
+        "current_hand_actions": [],
+        "recent_hands": [],
+    }
+    data.update(overrides)
+    return data
+
+
+def completed(hand_number, community, shown, winners, actions=None):
+    return {
+        "hand_number": hand_number,
+        "community_number": community,
+        "shown_numbers": {str(seat): number for seat, number in shown.items()},
+        "winners": winners,
+        "pot": 20,
+        "actions": actions or [],
+    }
+
+
+class Phase3BotTests(unittest.TestCase):
+    def setUp(self):
+        _reset_learning_for_tests()
+
+    def assert_legal(self, data):
+        action = decide(data)
+        self.assertIn(action["action"], data["legal_actions"])
+        if action["action"] in ("bet", "raise"):
+            self.assertIsInstance(action.get("amount"), int)
+            self.assertGreaterEqual(action["amount"], data["min_raise_to"])
+            self.assertLessEqual(action["amount"], data["max_raise_to"])
+        else:
+            self.assertNotIn("amount", action)
+
+    def test_filters_folded_and_busted_but_keeps_all_in(self):
+        seats = players()
+        seats[1]["folded"] = True
+        seats[2]["busted"] = True
+        seats[3]["all_in"] = True
+        live = _opponents(request(players=seats), live_only=True)
+        self.assertEqual([player["seat"] for player in live], [3, 4, 5])
+
+    def test_clear_requires_plus_ten_and_strictly_first(self):
+        tied = request(players=players(20, [20, 0, 0, 0, 0]))
+        ahead = request(players=players(20, [19, 0, 0, 0, 0]))
+        below = request(players=players(9, [0, 0, 0, 0, 0]))
+        self.assertFalse(_is_clearing(tied))
+        self.assertTrue(_is_clearing(ahead))
+        self.assertFalse(_is_clearing(below))
+
+    def test_objective_tracks_table_leader(self):
+        data = request(players=players(-4, [35, -10, 2, 4, 1]))
+        self.assertEqual(_objective_target(data), 36)
+
+    def test_multiway_equity_is_lower_than_heads_up_equity(self):
+        six = request(round="post_reveal", your_number=11, community_number=4)
+        six_profiles = OPPONENTS.ingest(six)
+        six_equity = _multiway_equity(six, RULES.ingest(six), six_profiles)[0]
+        heads_players = players()
+        for seat in range(2, 6):
+            heads_players[seat]["folded"] = True
+        heads = request(round="post_reveal", your_number=11, community_number=4,
+                        players=heads_players)
+        heads_profiles = OPPONENTS.ingest(heads)
+        heads_equity = _multiway_equity(heads, RULES.ingest(heads), heads_profiles)[0]
+        self.assertLess(six_equity, heads_equity)
+
+    def test_pair_value_bets_multiway_under_verdigris(self):
+        data = request(
+            round="post_reveal",
+            your_number=7,
+            community_number=7,
+            pot=12,
+            min_raise_to=3,
+            legal_actions=["check", "bet"],
+        )
+        self.assertEqual(decide(data)["action"], "bet")
+
+    def test_bad_pair_has_negligible_multiway_equity_under_obsidian(self):
+        data = request(
+            table_rule="obsidian",
+            round="post_reveal",
+            your_number=7,
+            community_number=7,
+            pot=12,
+            min_raise_to=3,
+            legal_actions=["check", "bet"],
+        )
+        profiles = OPPONENTS.ingest(data)
+        equity = _multiway_equity(data, RULES.ingest(data), profiles)[0]
+        self.assertLess(equity, 0.01)
+
+    def test_rule_learning_uses_opponent_only_showdowns(self):
+        hand = completed(1, 6, {1: 13, 2: 8, 4: 3}, [1])
+        data = request(table_rule="new-rule", recent_hands=[hand])
+        decide(data)
+        self.assertEqual(RULES.model_for(data).observation_count, 2)
+
+    def test_multiwinner_showdown_does_not_invent_sidepot_ordering(self):
+        hand = completed(1, 6, {1: 10, 2: 10, 3: 4}, [1, 2])
+        data = request(table_rule="new-tie-rule", recent_hands=[hand])
+        decide(data)
+        self.assertEqual(RULES.model_for(data).observation_count, 0)
+
+    def test_phase_two_evidence_identifies_amaranth_seven_trump(self):
+        data = request(table_rule="amaranth")
+        model = RULES.model_for(data)
+        self.assertEqual(model.diagnostics()["best_hypothesis"], "top:seven_high")
+        self.assertGreater(model.equity(7, 4)[0], model.equity(13, 4)[0])
+
+    def test_duplicate_recent_window_is_idempotent(self):
+        hand = completed(1, 6, {1: 13, 2: 8, 4: 3}, [1])
+        data = request(table_rule="new-rule", recent_hands=[hand])
+        decide(data)
+        decide(data)
+        self.assertEqual(RULES.model_for(data).observation_count, 2)
+
+    def test_lead_protection_folds_when_exposure_loses_first_place(self):
+        seats = players(30, [15, 5, 0, -5, -10])
+        seats[0]["stack"] = 225  # five chips are already committed this hand
+        seats[0]["bet_this_round"] = 5
+        seats[1]["bet_this_round"] = 15
+        data = request(
+            hand_number=25,
+            round="post_reveal",
+            your_number=13,
+            community_number=4,
+            your_stack=225,
+            players=seats,
+            pot=35,
+            to_call=10,
+            min_raise_to=30,
+            max_raise_to=225,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 0, "action": "bet", "amount": 5},
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 15},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
+    def test_repeated_raise_does_not_trigger_stack_off(self):
+        data = request(
+            hand_number=20,
+            round="post_reveal",
+            your_number=13,
+            community_number=4,
+            your_stack=150,
+            pot=180,
+            to_call=80,
+            min_raise_to=150,
+            max_raise_to=150,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 20},
+                {"round": "post_reveal", "seat": 0, "action": "raise", "amount": 50},
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 130},
+            ],
+        )
+        self.assertNotEqual(decide(data)["action"], "raise")
+
+    def test_forced_cost_skips_busted_seats(self):
+        full = request(hand_number=59, button_seat=4)
+        reduced_players = players()
+        for seat in (1, 3, 5):
+            reduced_players[seat]["busted"] = True
+        reduced = request(hand_number=59, button_seat=4, players=reduced_players)
+        self.assertEqual(_future_forced_cost(full), 1)
+        self.assertEqual(_future_forced_cost(reduced), 0)
+
+    def test_amount_honours_authoritative_total_bounds(self):
+        data = request(
+            your_stack=7,
+            pot=100,
+            to_call=5,
+            min_raise_to=9,
+            max_raise_to=9,
+        )
+        self.assertEqual(_amount(data, 10.0), 9)
+
+    def test_diagnostics_include_multiway_objective(self):
+        data = request(players=players(5, [12, 3, 0, -4, -8]))
+        action = decide(data)
+        diagnostics = decision_diagnostics(data, action)
+        self.assertEqual(diagnostics["live_opponents"], 5)
+        self.assertEqual(diagnostics["target_delta"], 13)
+        self.assertEqual(diagnostics["leader_delta"], 12)
+        self.assertEqual(diagnostics["action"], action)
+
+    def test_concurrent_duplicate_requests_are_safe(self):
+        hand = completed(1, 6, {0: 13, 1: 8, 2: 3}, [0])
+        data = request(table_rule="parallel-rule", recent_hands=[hand])
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            actions = list(pool.map(lambda _: decide(data), range(24)))
+        self.assertTrue(all(action == actions[0] for action in actions))
+        self.assertEqual(RULES.model_for(data).observation_count, 2)
+
+    def test_random_six_seat_requests_always_return_legal_actions(self):
+        rng = random.Random(303)
+        for index in range(300):
+            seats = players(
+                rng.randint(-100, 150),
+                [rng.randint(-150, 250) for _ in range(5)],
+            )
+            for player in seats[1:]:
+                player["folded"] = rng.random() < 0.25
+                player["busted"] = rng.random() < 0.05
+            if all(player["folded"] or player["busted"] for player in seats[1:]):
+                seats[1]["folded"] = False
+                seats[1]["busted"] = False
+            facing = rng.random() < 0.55
+            legal = ["fold", "call", "raise"] if facing else ["check", "bet"]
+            stack = rng.randint(4, 400)
+            minimum = rng.randint(2, max(2, stack))
+            maximum = rng.randint(minimum, max(minimum, stack))
+            data = request(
+                match_id=f"fuzz-{index}",
+                table_rule=("verdigris", "cinnabar", "amaranth", "obsidian")[index % 4],
+                players=seats,
+                hand_number=rng.randint(1, 60),
+                round=rng.choice(["pre_reveal", "post_reveal"]),
+                your_number=rng.randint(1, 13),
+                your_stack=stack,
+                community_number=rng.randint(1, 13),
+                pot=rng.randint(3, 600),
+                to_call=rng.randint(1, stack) if facing else 0,
+                min_raise_to=minimum,
+                max_raise_to=maximum,
+                legal_actions=legal,
+            )
+            if data["round"] == "pre_reveal":
+                data["community_number"] = None
+            self.assert_legal(data)
+
+
+if __name__ == "__main__":
+    unittest.main()
