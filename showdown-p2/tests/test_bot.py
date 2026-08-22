@@ -150,6 +150,80 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(decide(data), {"action": "fold"})
 
+    def test_verdigris_high_hand_does_not_reraise_nadia(self):
+        data = request(
+            match_id="phase2-replay-verdigris",
+            table_rule="verdigris",
+            hand_number=29,
+            round="post_reveal",
+            your_number=11,
+            community_number=12,
+            your_stack=170,
+            pot=33,
+            to_call=13,
+            min_raise_to=40,
+            max_raise_to=170,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 1, "action": "bet", "amount": 13},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "call"})
+
+    def test_verdigris_marginal_equity_folds_to_post_reveal_raise(self):
+        data = request(
+            match_id="phase2-replay-verdigris-marginal",
+            table_rule="verdigris",
+            hand_number=8,
+            round="post_reveal",
+            your_number=8,
+            community_number=1,
+            your_stack=180,
+            pot=32,
+            to_call=14,
+            min_raise_to=46,
+            max_raise_to=180,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 0, "action": "bet", "amount": 4},
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 14},
+            ],
+            recent_hands=[
+                shown_hand(
+                    6,
+                    8,
+                    13,
+                    1,
+                    1,
+                    [{"round": "post_reveal", "seat": 1, "action": "raise", "amount": 14}],
+                )
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
+    def test_cinnabar_second_reraise_preserves_stack(self):
+        data = request(
+            match_id="phase2-replay-cinnabar",
+            table_rule="cinnabar",
+            hand_number=10,
+            round="post_reveal",
+            your_number=12,
+            community_number=7,
+            your_stack=169,
+            pot=180,
+            to_call=80,
+            min_raise_to=211,
+            max_raise_to=211,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 0, "action": "bet", "amount": 5},
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 14},
+                {"round": "post_reveal", "seat": 0, "action": "raise", "amount": 27},
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 80},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
     def test_obsidian_low_non_pair_value_bets_immediately(self):
         data = request(
             table_rule="obsidian",

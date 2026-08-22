@@ -206,6 +206,20 @@ def _last_opponent_action(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _opponent_aggression_count(data: Dict[str, Any]) -> int:
+    """Count the opponent's bets/raises in the current betting round."""
+
+    opponent_seat = _opponent_seat(data)
+    round_name = data.get("round")
+    return sum(
+        1
+        for action in data.get("current_hand_actions") or []
+        if action.get("round") == round_name
+        and int(action.get("seat", -1)) == opponent_seat
+        and action.get("action") in ("bet", "raise")
+    )
+
+
 def _estimated_equity(
     data: Dict[str, Any], model: RuleModel, stats: Dict[str, float]
 ) -> tuple[float, float]:
@@ -344,12 +358,34 @@ def decide(data: Dict[str, Any]) -> Action:
     if to_call > 0:
         pot = max(0, int(data.get("pot", 0)))
         stack = max(1, int(data.get("your_stack", 1)))
+        last_opponent = _last_opponent_action(data)
+        opponent_aggression = _opponent_aggression_count(data)
         pot_odds = to_call / max(1.0, pot + to_call)
         risk_premium = 0.035 + 0.11 * (to_call / stack)
         risk_premium += 0.09 * (1.0 - confidence)
+        if last_opponent and last_opponent.get("action") == "raise":
+            # A raise after we have already shown aggression is much more
+            # value-heavy than an opening bet.  This distinction is decisive
+            # against opponents that repeatedly min-bet but only re-raise with
+            # the top of their range.
+            risk_premium += 0.035
         if delta >= target and hands_left <= 12:
             risk_premium += 0.07
         risk_premium -= min(0.06, catch_up * 0.08)
+
+        # Never inflate a multi-raise pot on model equity alone.  In a two-card
+        # game the opponent's second aggressive action is exceptionally strong
+        # evidence, and a single mistaken stack-off can make the +25 target
+        # mathematically unreachable.  Continue only with near-certain equity,
+        # and call rather than reopen the betting.
+        severe_re_raise = opponent_aggression >= 2 or (
+            opponent_aggression >= 1
+            and to_call >= max(20, round(stack * 0.30))
+        )
+        if severe_re_raise:
+            if equity >= 0.985 and confidence >= 0.90 and "call" in legal:
+                return {"action": "call"}
+            return _safe_exit(data)
 
         # Cheap early calls buy showdown evidence.  The cap prevents learning
         # from becoming an excuse to pay large, dominated bets.
@@ -365,8 +401,20 @@ def decide(data: Dict[str, Any]) -> Action:
 
         value_raise = 0.80 if round_name == "post_reveal" else 0.84
         value_raise += 0.04 * (1.0 - confidence)
+        if last_opponent and last_opponent.get("action") in ("bet", "raise"):
+            if round_name == "post_reveal":
+                response_floor = (
+                    0.94 if last_opponent.get("action") == "raise" else 0.92
+                )
+            else:
+                response_floor = 0.96
+            value_raise = max(value_raise, response_floor)
         if equity >= value_raise and not (delta >= target and hands_left <= 10):
-            shove = equity >= 0.965 and confidence >= 0.55
+            shove = (
+                opponent_aggression == 0
+                and equity >= 0.965
+                and confidence >= 0.55
+            )
             return _aggress(
                 data,
                 0.58 if round_name == "post_reveal" else 0.40,
