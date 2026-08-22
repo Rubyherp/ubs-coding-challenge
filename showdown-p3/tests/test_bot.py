@@ -17,7 +17,7 @@ from bot import (
     decide,
     decision_diagnostics,
 )
-from rule_model import RULES
+from rule_model import EVENT_OBSERVATIONS, RULES, warm_event_models
 
 
 NAMES = ("you", "Dana", "Miles", "Theo", "Rhea", "Bram")
@@ -172,6 +172,12 @@ class Phase3BotTests(unittest.TestCase):
         model = RULES.model_for(data)
         self.assertEqual(model.diagnostics()["best_hypothesis"], "top:seven_high")
         self.assertGreater(model.equity(7, 4)[0], model.equity(13, 4)[0])
+
+    def test_known_rule_models_can_be_prewarmed(self):
+        warm_event_models()
+        for name in EVENT_OBSERVATIONS:
+            model = RULES.model_for({"table_rule": name})
+            self.assertIn((13, None), model._equity_cache)
 
     def test_duplicate_recent_window_is_idempotent(self):
         hand = completed(1, 6, {1: 13, 2: 8, 4: 3}, [1])

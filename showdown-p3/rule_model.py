@@ -302,3 +302,18 @@ class RuleRegistry:
 
 
 RULES = RuleRegistry()
+
+
+def warm_event_models() -> None:
+    """Precompute stable rule outcomes before Render marks the service ready."""
+
+    for name in EVENT_OBSERVATIONS:
+        model = RULES.model_for({"table_rule": name})
+        for community in range(1, 14):
+            for left in range(1, 14):
+                for right in range(1, 14):
+                    model.outcome_probabilities(left, right, community)
+        for number in range(1, 14):
+            model.equity(number, None)
+            for community in range(1, 14):
+                model.equity(number, community)

@@ -8,6 +8,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from bot import decide, decision_diagnostics
+from rule_model import warm_event_models
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -81,6 +82,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(os.environ.get("PORT", "5000"))
+    warm_event_models()
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"SHOWDOWN Phase 3 bot listening on port {port}", flush=True)
     server.serve_forever()
