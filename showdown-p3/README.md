@@ -23,7 +23,12 @@ require the estimated probability that *everyone* folds.
 The decision engine targets the current table leader rather than a fixed chip
 number, protects a qualifying unique lead, models remaining forced bets while
 skipping busted seats, and avoids escalating repeated raises or risking an
-entire lead in one pot.
+entire lead in one pot. When the bot is behind, objective pressure rises with
+the leader gap, elapsed hands, and shrinking field; this lowers value thresholds
+and increases bet sizes because a safe third-place finish scores the same as a
+bust-out. Large reraises are evaluated with pot odds and the probability that no
+opponent can beat the hand, so dominant hands and profitable split pots are not
+discarded by a blanket stack-risk cutoff.
 
 ## Run and test
 

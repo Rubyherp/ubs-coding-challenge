@@ -225,12 +225,12 @@ def _range_weights(
 
 def _multiway_equity(
     data: Dict[str, Any], model: RuleModel, profiles: Dict[int, OpponentProfile]
-) -> tuple[float, float, int]:
-    """Expected pot share versus every non-folded, non-busted opponent."""
+) -> tuple[float, float, int, float]:
+    """Expected pot share and chance nobody beats us versus the live field."""
 
     opponents = _opponents(data, live_only=True)
     if not opponents:
-        return 1.0, 1.0, 0
+        return 1.0, 1.0, 0, 1.0
     number = int(data.get("your_number", 1))
     community_value = data.get("community_number")
     communities: Iterable[int] = (
@@ -246,6 +246,7 @@ def _multiway_equity(
         for player in opponents
     ]
     community_equities: List[float] = []
+    community_safety: List[float] = []
     for community in communities:
         # dp[t] is the probability nobody beats us and exactly t opponents tie.
         dp = [1.0]
@@ -265,9 +266,14 @@ def _multiway_equity(
         community_equities.append(
             sum(probability / (ties + 1) for ties, probability in enumerate(dp))
         )
+        community_safety.append(sum(dp))
     equity = sum(community_equities) / len(community_equities)
+    showdown_safety = sum(community_safety) / len(community_safety)
     _, confidence = model.equity(number, None if community_value is None else int(community_value))
-    return _clamp(equity, 0.001, 0.999), confidence, len(opponents)
+    return (
+        _clamp(equity, 0.001, 0.999), confidence, len(opponents),
+        _clamp(showdown_safety, 0.001, 0.999),
+    )
 
 
 def _objective_target(data: Dict[str, Any]) -> int:
@@ -279,6 +285,38 @@ def _objective_target(data: Dict[str, Any]) -> int:
 def _is_clearing(data: Dict[str, Any]) -> bool:
     delta = int(_hero(data).get("chip_delta", 0))
     return delta >= _objective_target(data)
+
+
+def _objective_pressure(data: Dict[str, Any]) -> float:
+    """How strongly tournament utility should favour variance over chip safety."""
+
+    delta = int(_hero(data).get("chip_delta", 0))
+    target = _objective_target(data)
+    if delta >= target:
+        return 0.0
+    gap = target - delta
+    stack = max(1, int(data.get("your_stack", 1)))
+    hand = max(1, int(data.get("hand_number", 1)))
+    total = max(hand, int(data.get("total_hands", 60)))
+    active_opponents = sum(
+        not player.get("busted", False) for player in _opponents(data)
+    )
+    pressure = 0.12 + 0.55 * (gap / stack) + 0.33 * (hand / total)
+    if active_opponents <= 2:
+        pressure += 0.12
+    return _clamp(pressure, 0.0, 1.0)
+
+
+def _value_fraction(
+    base: float, pressure: float, equity: float, showdown_safety: float
+) -> float:
+    """Turn a chip-EV sizing baseline into a first-place-aware value size."""
+
+    edge = _clamp((equity - 0.50) / 0.50, 0.0, 1.0)
+    fraction = base + pressure * (0.30 + 0.55 * edge)
+    if showdown_safety >= 0.96:
+        fraction += 0.25 * pressure
+    return fraction
 
 
 def _future_forced_cost(data: Dict[str, Any]) -> int:
@@ -381,11 +419,14 @@ def decide(data: Dict[str, Any]) -> Action:
     if _can_lock(data):
         return _safe_exit(data)
 
-    equity, confidence, opponent_count = _multiway_equity(data, model, profiles)
+    equity, confidence, opponent_count, showdown_safety = _multiway_equity(
+        data, model, profiles
+    )
     hero = _hero(data)
     delta = int(hero.get("chip_delta", 0))
     target = _objective_target(data)
     protecting = delta >= target
+    objective_pressure = _objective_pressure(data)
     hand = int(data.get("hand_number", 1))
     total = int(data.get("total_hands", 60))
     hands_left = max(0, total - hand)
@@ -397,6 +438,8 @@ def decide(data: Dict[str, Any]) -> Action:
         "equity": equity,
         "confidence": confidence,
         "opponents": opponent_count,
+        "showdown_safety": showdown_safety,
+        "objective_pressure": objective_pressure,
     }
 
     if to_call > 0:
@@ -418,23 +461,41 @@ def decide(data: Dict[str, Any]) -> Action:
             surplus = delta - target
             if _current_commitment(data, delta) + to_call > surplus:
                 return _safe_exit(data)
-        elif hands_left <= 7:
-            gap = max(0, target - delta)
-            risk -= min(0.012, gap / 1000.0)
+        else:
+            risk -= 0.075 * objective_pressure
+            leader_player = max(
+                _opponents(data),
+                key=lambda player: int(player.get("chip_delta", -200)),
+                default=None,
+            )
+            if (
+                leader_player is not None
+                and aggressor == int(leader_player.get("seat", -1))
+            ):
+                risk -= 0.025 * objective_pressure
 
         severe = aggression_count >= 2 or to_call >= max(25, round(stack * 0.30))
         if severe:
-            if equity >= 0.90 and confidence >= 0.75 and "call" in legal:
+            profitable = equity + 1e-9 >= pot_odds + max(0.0, risk)
+            safe_split = (
+                showdown_safety >= 0.96
+                and equity + 0.015 >= pot_odds
+            )
+            if "call" in legal and (profitable or safe_split):
                 return {"action": "call"}
             return _safe_exit(data)
 
-        raise_threshold = 0.62 + 0.18 / n
+        raise_threshold = 0.62 + 0.18 / n - 0.10 * objective_pressure
         if aggressor is not None:
             raise_threshold += 0.08
         if protecting:
             raise_threshold = max(raise_threshold, 0.90)
         if equity >= raise_threshold and not protecting:
-            return _aggress(data, 0.46 if data.get("round") == "post_reveal" else 0.34)
+            base = 0.46 if data.get("round") == "post_reveal" else 0.34
+            return _aggress(
+                data,
+                _value_fraction(base, objective_pressure, equity, showdown_safety),
+            )
         if equity + 1e-9 >= pot_odds + risk and "call" in legal:
             return {"action": "call"}
         return _safe_exit(data)
@@ -446,10 +507,20 @@ def decide(data: Dict[str, Any]) -> Action:
         strong = 0.61 + 0.18 / n + (0.08 if protecting else 0.0)
         medium = 0.49 + 0.14 / n + (0.08 if protecting else 0.0)
     uncertainty = 0.05 * (1.0 - confidence)
+    strong -= 0.12 * objective_pressure
+    medium -= 0.10 * objective_pressure
     if equity >= strong + uncertainty:
-        return _aggress(data, 0.55 if data.get("round") == "post_reveal" else 0.42)
+        base = 0.55 if data.get("round") == "post_reveal" else 0.42
+        return _aggress(
+            data,
+            _value_fraction(base, objective_pressure, equity, showdown_safety),
+        )
     if equity >= medium + uncertainty:
-        return _aggress(data, 0.36 if data.get("round") == "post_reveal" else 0.28)
+        base = 0.36 if data.get("round") == "post_reveal" else 0.28
+        return _aggress(
+            data,
+            _value_fraction(base, objective_pressure, equity, showdown_safety),
+        )
     if protecting:
         return _safe_exit(data)
 
@@ -472,10 +543,15 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         equity = cached["equity"]
         confidence = cached["confidence"]
         opponents = cached["opponents"]
+        showdown_safety = cached["showdown_safety"]
+        objective_pressure = cached["objective_pressure"]
     else:
         model = RULES.model_for(data)
         profiles = OPPONENTS.ingest(data)
-        equity, confidence, opponents = _multiway_equity(data, model, profiles)
+        equity, confidence, opponents, showdown_safety = _multiway_equity(
+            data, model, profiles
+        )
+        objective_pressure = _objective_pressure(data)
     hero = _hero(data)
     info = model.diagnostics()
     leader = max((int(player.get("chip_delta", -200)) for player in _opponents(data)), default=-200)
@@ -495,7 +571,9 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         "pot": data.get("pot"),
         "to_call": data.get("to_call"),
         "equity": round(equity, 4),
+        "showdown_safety": round(showdown_safety, 4),
         "confidence": round(confidence, 4),
+        "objective_pressure": round(objective_pressure, 4),
         "observations": info["observations"],
         "hypothesis": info["best_hypothesis"],
         "action": action,

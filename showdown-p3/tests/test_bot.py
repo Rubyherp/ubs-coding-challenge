@@ -11,6 +11,7 @@ from bot import (
     _future_forced_cost,
     _is_clearing,
     _multiway_equity,
+    _objective_pressure,
     _objective_target,
     _opponents,
     _reset_learning_for_tests,
@@ -229,6 +230,74 @@ class Phase3BotTests(unittest.TestCase):
             ],
         )
         self.assertNotEqual(decide(data)["action"], "raise")
+
+    def test_dominant_pair_calls_large_reraise_at_profitable_odds(self):
+        seats = players(-3, [159, -38, -200, 173, -91])
+        seats[3]["busted"] = True
+        data = request(
+            hand_number=10,
+            round="post_reveal",
+            your_number=11,
+            community_number=11,
+            your_stack=178,
+            players=seats,
+            pot=194,
+            to_call=55,
+            min_raise_to=129,
+            max_raise_to=178,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 5, "action": "bet", "amount": 8},
+                {"round": "post_reveal", "seat": 0, "action": "raise", "amount": 19},
+                {"round": "post_reveal", "seat": 2, "action": "call", "amount": 19},
+                {"round": "post_reveal", "seat": 4, "action": "raise", "amount": 74},
+                {"round": "post_reveal", "seat": 5, "action": "call", "amount": 74},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "call"})
+
+    def test_objective_pressure_rises_with_gap_and_time(self):
+        early = request(
+            hand_number=5,
+            your_stack=200,
+            players=players(0, [20, 0, 0, 0, 0]),
+        )
+        late = request(
+            hand_number=50,
+            your_stack=100,
+            players=players(-100, [250, 0, 0, 0, 0]),
+        )
+        self.assertGreater(_objective_pressure(late), _objective_pressure(early))
+        self.assertEqual(_objective_pressure(late), 1.0)
+
+    def test_trailing_value_bet_uses_objective_sized_pressure(self):
+        modest = request(
+            hand_number=5,
+            round="post_reveal",
+            community_number=4,
+            pot=20,
+            min_raise_to=4,
+            max_raise_to=200,
+            legal_actions=["check", "bet"],
+            players=players(0, [20, 0, 0, 0, 0]),
+        )
+        urgent = request(
+            hand_number=50,
+            round="post_reveal",
+            community_number=4,
+            your_stack=100,
+            pot=20,
+            min_raise_to=4,
+            max_raise_to=100,
+            legal_actions=["check", "bet"],
+            players=players(-100, [250, 0, 0, 0, 0]),
+        )
+        with patch("bot._multiway_equity", return_value=(0.85, 0.95, 1, 0.99)):
+            modest_action = decide(modest)
+            urgent_action = decide(urgent)
+        self.assertEqual(modest_action["action"], "bet")
+        self.assertEqual(urgent_action["action"], "bet")
+        self.assertGreater(urgent_action["amount"], modest_action["amount"])
 
     def test_forced_cost_skips_busted_seats(self):
         full = request(hand_number=59, button_seat=4)
