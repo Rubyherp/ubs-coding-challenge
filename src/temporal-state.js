@@ -9,6 +9,7 @@ export class TemporalState {
     this.totalMass = 0;
     this.efficiency = 0;
     this.recurrentMass = 0;
+    this.recurrentByNode = new Map();
   }
 
   get redundancy() {
@@ -54,7 +55,10 @@ export function applyTemporalEdge(state, source, target) {
 
     targetMass.set(origin, newMass);
     state.totalMass += addedMass;
-    if (origin === target) state.recurrentMass += addedMass;
+    if (origin === target) {
+      state.recurrentMass += addedMass;
+      state.recurrentByNode.set(target, (state.recurrentByNode.get(target) ?? 0) + addedMass);
+    }
 
     const candidateDistance = prefixDistance.get(origin) + 1;
     const oldDistance = targetShortest.get(origin);

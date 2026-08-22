@@ -62,6 +62,10 @@ export class RiskEngine {
         const hadTemporalRoute = this.#temporal.shortest
           .get(transaction.toUserId)?.has(transaction.fromUserId) ?? false;
         const before = summarizeTemporalState(this.#temporal);
+        const priorLocalRecurrentMass = this.#localRecurrentMass(
+          transaction.fromUserId,
+          transaction.toUserId
+        );
         applyTemporalEdge(this.#temporal, transaction.fromUserId, transaction.toUserId);
         riskScore = scoreTemporalChange({
           source: transaction.fromUserId,
@@ -69,7 +73,8 @@ export class RiskEngine {
           before,
           after: summarizeTemporalState(this.#temporal),
           hadTemporalRoute,
-          repetitions: this.#graph.edgeCount(transaction.fromUserId, transaction.toUserId)
+          repetitions: this.#graph.edgeCount(transaction.fromUserId, transaction.toUserId),
+          priorLocalRecurrentMass
         });
 
         const sequence = this.#sequence++;
@@ -136,9 +141,25 @@ export class RiskEngine {
     }
     return this.#watermarkNs - LOOKBACK_NS;
   }
+
+  #localRecurrentMass(source, target) {
+    const nodes = this.#graph.weaklyConnected(source);
+    for (const node of this.#graph.weaklyConnected(target)) nodes.add(node);
+    let mass = 0;
+    for (const node of nodes) mass += this.#temporal.recurrentByNode.get(node) ?? 0;
+    return mass;
+  }
 }
 
-export function scoreTemporalChange({ source, target, before, after, hadTemporalRoute, repetitions }) {
+export function scoreTemporalChange({
+  source,
+  target,
+  before,
+  after,
+  hadTemporalRoute,
+  repetitions,
+  priorLocalRecurrentMass
+}) {
   if (source === target) return SELF_LOOP_RISK;
 
   const totalDelta = Math.max(0, after.totalMass - before.totalMass);
@@ -162,7 +183,7 @@ export function scoreTemporalChange({ source, target, before, after, hadTemporal
   if (recurrentDelta > 0) {
     raw += 0.35;
     raw += 0.32 * Math.log1p(4 * recurrentDelta);
-    raw += 0.98 * Math.log1p(4 * before.recurrentMass);
+    raw += 0.98 * Math.log1p(4 * priorLocalRecurrentMass);
   }
 
   const risk = roundScore(Math.max(0, Math.min(SELF_LOOP_RISK, 1 - Math.exp(-raw))));

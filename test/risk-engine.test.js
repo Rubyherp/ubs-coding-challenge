@@ -298,7 +298,7 @@ test("repeating an edge inside a cycle outranks repeating an isolated edge", () 
   assert.ok(recurrentRepeat > isolatedRepeat);
 });
 
-test("established recurrence raises a later independent return", () => {
+test("disconnected recurrence does not raise an unrelated return", () => {
   const standalone = scoreSequence([["a", "b"], ["b", "a"]]);
 
   const engine = new RiskEngine();
@@ -308,7 +308,15 @@ test("established recurrence raises a later independent return", () => {
     transaction("return", "b", "a", "2026-06-08T12:02:00Z")
   ])[0].riskScore;
 
-  assert.ok(afterRecurrence > standalone);
+  assert.equal(afterRecurrence, standalone);
+});
+
+test("recurrence in the same component raises a later return", () => {
+  const firstReturn = scoreSequence([["a", "b"], ["b", "c"], ["c", "a"]]);
+  const laterReturn = scoreSequence([
+    ["a", "b"], ["b", "c"], ["c", "a"], ["b", "d"], ["d", "a"]
+  ]);
+  assert.ok(laterReturn > firstReturn);
 });
 
 test("expiration rebuilds temporal paths from only the remaining arrivals", () => {
