@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DirectedGraph } from "../src/directed-graph.js";
-import { DuplicateConflictError, RiskEngine } from "../src/risk-engine.js";
+import { DuplicateConflictError, RiskEngine, scoreFeatures } from "../src/risk-engine.js";
 import { normalizeTransaction } from "../src/transaction.js";
 
 const BASE = "2026-06-08T12:00:00Z";
@@ -50,6 +50,7 @@ test("the five Phase 1 examples have coherent structural ordering", () => {
   assert.ok(extension < convergence, `${extension} should be below ${convergence}`);
   assert.ok(convergence < returning, `${convergence} should be below ${returning}`);
   assert.ok(returning < multiLoop, `${returning} should be below ${multiLoop}`);
+  assert.ok(multiLoop < 1, "complex patterns should retain headroom for stronger structures");
   for (const score of [isolated, extension, convergence, returning, multiLoop]) {
     assert.ok(score >= 0 && score <= 1);
   }
@@ -86,7 +87,7 @@ test("an identical duplicate returns its original score and does not add an edge
   const reverse = engine.processBatch([
     transaction("reverse", "b", "a", "2026-06-08T12:01:00Z")
   ])[0];
-  assert.ok(reverse.riskScore > 0.5);
+  assert.ok(reverse.riskScore > first.riskScore * 5);
 });
 
 test("conflicting IDs reject the whole batch before state changes", () => {
@@ -114,13 +115,13 @@ test("a conflict with a previously accepted ID also leaves state unchanged", () 
   assert.deepEqual(engine.diagnostics(), before);
 });
 
-test("transactions exactly 24 hours old remain active", () => {
+test("transactions exactly 24 hours old are outside the half-open window", () => {
   const engine = new RiskEngine();
   const isolated = engine.processBatch([transaction("old", "a", "b", "2026-06-08T00:00:00Z")])[0];
-  const extension = engine.processBatch([transaction("boundary", "b", "c", "2026-06-09T00:00:00Z")])[0];
+  const boundary = engine.processBatch([transaction("boundary", "b", "c", "2026-06-09T00:00:00Z")])[0];
 
-  assert.ok(extension.riskScore > isolated.riskScore);
-  assert.equal(engine.diagnostics().activeTransactions, 2);
+  assert.equal(boundary.riskScore, isolated.riskScore);
+  assert.equal(engine.diagnostics().activeTransactions, 1);
 });
 
 test("transactions older than 24 hours by one nanosecond expire", () => {
@@ -132,12 +133,21 @@ test("transactions older than 24 hours by one nanosecond expire", () => {
   assert.equal(engine.diagnostics().activeTransactions, 1);
 });
 
+test("transactions one nanosecond inside the 24-hour boundary remain active", () => {
+  const engine = new RiskEngine();
+  const isolated = engine.processBatch([transaction("old", "a", "b", "2026-06-08T00:00:00.000000001Z")])[0];
+  const extension = engine.processBatch([transaction("inside", "b", "c", "2026-06-09T00:00:00.000000000Z")])[0];
+
+  assert.ok(extension.riskScore > isolated.riskScore);
+  assert.equal(engine.diagnostics().activeTransactions, 2);
+});
+
 test("late arrivals inside the watermark window participate in arrival order", () => {
   const engine = new RiskEngine();
-  engine.processBatch([transaction("newer", "a", "b", "2026-06-08T12:10:00Z")]);
+  const isolated = engine.processBatch([transaction("newer", "a", "b", "2026-06-08T12:10:00Z")])[0];
   const lateReturn = engine.processBatch([transaction("late", "b", "a", "2026-06-08T12:05:00Z")])[0];
 
-  assert.ok(lateReturn.riskScore > 0.5);
+  assert.ok(lateReturn.riskScore > isolated.riskScore * 5);
   assert.equal(engine.diagnostics().activeTransactions, 2);
 });
 
@@ -165,7 +175,8 @@ test("parallel edge instances expire independently", () => {
 test("a self-transfer is treated as an immediate return loop", () => {
   const engine = new RiskEngine();
   const self = engine.processBatch([transaction("self", "a", "a")])[0];
-  assert.ok(self.riskScore > 0.5);
+  const isolated = scoreSequence([["a", "b"]]);
+  assert.ok(self.riskScore > isolated * 5);
 });
 
 test("fan-in and fan-out add signal even without a shared upstream path", () => {
@@ -214,4 +225,42 @@ test("graph path counts recognize multiple independent shortest return paths", (
   assert.deepEqual(path, { exists: true, distance: 2, pathCount: 2 });
   const features = graph.analyzeEdge("source", "target");
   assert.equal(features.returnPath.pathCount, 2);
+});
+
+test("path deltas distinguish new, shortened, equal, and longer routes", () => {
+  const shortened = new DirectedGraph();
+  shortened.addEdge("a", "x");
+  shortened.addEdge("x", "y");
+  shortened.addEdge("y", "b");
+  assert.equal(shortened.analyzeEdge("a", "b").shortenedPairs, 1);
+
+  const equal = new DirectedGraph();
+  equal.addEdge("root", "left");
+  equal.addEdge("left", "sink");
+  equal.addEdge("root", "right");
+  const equalFeatures = equal.analyzeEdge("right", "sink");
+  assert.equal(equalFeatures.equalAlternatePairs, 1);
+
+  const longer = new DirectedGraph();
+  longer.addEdge("root", "sink");
+  longer.addEdge("root", "middle");
+  const longerFeatures = longer.analyzeEdge("middle", "sink");
+  assert.equal(longerFeatures.longerAlternatePairs, 1);
+});
+
+test("multiple independent return paths score above a single return path", () => {
+  const single = new DirectedGraph();
+  single.addEdge("target", "left");
+  single.addEdge("left", "source");
+
+  const multiple = new DirectedGraph();
+  multiple.addEdge("target", "left");
+  multiple.addEdge("target", "right");
+  multiple.addEdge("left", "source");
+  multiple.addEdge("right", "source");
+
+  assert.ok(
+    scoreFeatures(multiple.analyzeEdge("source", "target"))
+      > scoreFeatures(single.analyzeEdge("source", "target"))
+  );
 });

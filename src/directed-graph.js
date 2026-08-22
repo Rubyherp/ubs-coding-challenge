@@ -71,6 +71,25 @@ export class DirectedGraph {
     return seen;
   }
 
+  /** Unweighted shortest distances, with the start node at distance zero. */
+  distances(start, { reverse = false } = {}) {
+    const adjacency = reverse ? this.#in : this.#out;
+    const distances = new Map([[start, 0]]);
+    const queue = [start];
+
+    for (let index = 0; index < queue.length; index += 1) {
+      const node = queue[index];
+      const candidate = distances.get(node) + 1;
+      for (const neighbor of adjacency.get(node)?.keys() ?? []) {
+        if (!distances.has(neighbor)) {
+          distances.set(neighbor, candidate);
+          queue.push(neighbor);
+        }
+      }
+    }
+    return distances;
+  }
+
   /** Shortest positive-length route and number of shortest structural routes. */
   shortestPath(start, target) {
     if (start === target) return this.#shortestCycle(start);
@@ -132,24 +151,53 @@ export class DirectedGraph {
    * pairs describe all routes that the edge can create or shorten.
    */
   analyzeEdge(from, to) {
-    const ancestors = this.reachable(from, { reverse: true });
-    const descendants = this.reachable(to);
-    const affectedPairs = ancestors.size * descendants.size;
-    let redundantPairs = 0;
+    const ancestorDistances = this.distances(from, { reverse: true });
+    const descendantDistances = this.distances(to);
+    const ancestors = ancestorDistances.keys();
+    const descendants = [...descendantDistances.keys()];
+    const ancestorCount = ancestorDistances.size;
+    const descendantCount = descendantDistances.size;
+    const affectedPairs = ancestorCount * descendantCount;
+    let newPairs = 0;
+    let shortenedPairs = 0;
+    let equalAlternatePairs = 0;
+    let longerAlternatePairs = 0;
+    let relativeDistanceSavings = 0;
 
-    // Traverse from whichever side requires fewer graph walks.
-    if (ancestors.size <= descendants.size) {
+    // Evaluate the exact shortest-path delta for every ancestor × descendant
+    // pair. This distinguishes reachability, shortening, and route redundancy.
+    if (ancestorCount <= descendantCount) {
       for (const ancestor of ancestors) {
-        const reachable = this.reachable(ancestor, { positiveOnly: true });
+        const existingDistances = this.distances(ancestor);
         for (const descendant of descendants) {
-          if (reachable.has(descendant)) redundantPairs += 1;
+          const candidateDistance = ancestorDistances.get(ancestor) + 1 + descendantDistances.get(descendant);
+          const existingDistance = positiveDistance(this, existingDistances, ancestor, descendant);
+          ({ newPairs, shortenedPairs, equalAlternatePairs, longerAlternatePairs, relativeDistanceSavings } = classifyPathDelta({
+            existingDistance,
+            candidateDistance,
+            newPairs,
+            shortenedPairs,
+            equalAlternatePairs,
+            longerAlternatePairs,
+            relativeDistanceSavings
+          }));
         }
       }
     } else {
       for (const descendant of descendants) {
-        const reaching = this.reachable(descendant, { reverse: true, positiveOnly: true });
-        for (const ancestor of ancestors) {
-          if (reaching.has(ancestor)) redundantPairs += 1;
+        const reverseDistances = this.distances(descendant, { reverse: true });
+        for (const [ancestor, distanceToFrom] of ancestorDistances) {
+          const candidateDistance = distanceToFrom + 1 + descendantDistances.get(descendant);
+          const existingDistance = positiveDistance(this, reverseDistances, descendant, ancestor);
+          ({ newPairs, shortenedPairs, equalAlternatePairs, longerAlternatePairs, relativeDistanceSavings } = classifyPathDelta({
+            existingDistance,
+            candidateDistance,
+            newPairs,
+            shortenedPairs,
+            equalAlternatePairs,
+            longerAlternatePairs,
+            relativeDistanceSavings
+          }));
         }
       }
     }
@@ -167,11 +215,28 @@ export class DirectedGraph {
     }
     const targetHasSelfCycle = this.reachable(to, { positiveOnly: true }).has(to);
 
+    let cycleRegionSize = 0;
+    if (returnPath.exists) {
+      const forwardFromTarget = this.reachable(to);
+      const backwardFromSource = this.reachable(from, { reverse: true });
+      for (const node of forwardFromTarget) {
+        if (backwardFromSource.has(node)) cycleRegionSize += 1;
+      }
+      if (from === to && cycleRegionSize === 0) cycleRegionSize = 1;
+    }
+
+    const redundantPairs = shortenedPairs + equalAlternatePairs + longerAlternatePairs;
+
     return Object.freeze({
       affectedPairs,
-      newPairs: Math.max(0, affectedPairs - redundantPairs),
+      newPairs,
       redundantPairs,
+      shortenedPairs,
+      equalAlternatePairs,
+      longerAlternatePairs,
+      relativeDistanceSavings,
       returnPath,
+      cycleRegionSize,
       existingEdgeCount: this.edgeCount(from, to),
       sourceOutDegree: this.distinctOutDegree(from),
       targetInDegree: this.distinctInDegree(to),
@@ -179,6 +244,27 @@ export class DirectedGraph {
       targetHasSelfCycle
     });
   }
+}
+
+function positiveDistance(graph, distances, start, target) {
+  if (start !== target) return distances.get(target);
+  const cycle = graph.shortestPath(start, start);
+  return cycle.exists ? cycle.distance : undefined;
+}
+
+function classifyPathDelta(state) {
+  const { existingDistance, candidateDistance } = state;
+  if (existingDistance === undefined) {
+    state.newPairs += 1;
+  } else if (candidateDistance < existingDistance) {
+    state.shortenedPairs += 1;
+    state.relativeDistanceSavings += (existingDistance - candidateDistance) / existingDistance;
+  } else if (candidateDistance === existingDistance) {
+    state.equalAlternatePairs += 1;
+  } else {
+    state.longerAlternatePairs += 1;
+  }
+  return state;
 }
 
 function increment(adjacency, from, to) {

@@ -34,8 +34,9 @@ export class RiskEngine {
       const cutoff = this.#watermarkNs - LOOKBACK_NS;
       let riskScore = 0;
 
-      // Late events older than the current window cannot affect active state.
-      if (transaction.createdAtNs >= cutoff) {
+      // The active interval is (watermark - 24h, watermark]. An event on the
+      // lower boundary is no longer within the most recent 24 hours.
+      if (transaction.createdAtNs > cutoff) {
         const features = this.#graph.analyzeEdge(transaction.fromUserId, transaction.toUserId);
         riskScore = scoreFeatures(features);
         this.#graph.addEdge(transaction.fromUserId, transaction.toUserId);
@@ -86,7 +87,7 @@ export class RiskEngine {
     if (this.#watermarkNs === null || createdAtNs > this.#watermarkNs) {
       this.#watermarkNs = createdAtNs;
       const cutoff = this.#watermarkNs - LOOKBACK_NS;
-      while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs < cutoff) {
+      while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs <= cutoff) {
         const expired = this.#expirations.pop();
         this.#graph.removeEdge(expired.from, expired.to);
       }
@@ -96,9 +97,15 @@ export class RiskEngine {
 
 /** Map structural graph deltas to a stable relative score in [0, 1]. */
 export function scoreFeatures(features) {
-  const growth = normalizedLog(features.newPairs, 10);
-  const affected = normalizedLog(features.affectedPairs, 25);
-  const redundancy = normalizedLog(features.redundantPairs, 10);
+  const growth = normalizedLog(features.newPairs, 12);
+  const affected = normalizedLog(features.affectedPairs, 32);
+  const routeCapacity = normalizedLog(
+    1.25 * features.shortenedPairs
+      + 0.80 * features.equalAlternatePairs
+      + 0.30 * features.longerAlternatePairs,
+    12
+  );
+  const distanceImprovement = 1 - Math.exp(-features.relativeDistanceSavings / 2);
   const repeat = 1 - Math.exp(-features.existingEdgeCount);
   const fanIn = 1 - Math.exp(-features.targetInDegree / 2);
   const fanOut = 1 - Math.exp(-features.sourceOutDegree / 2);
@@ -117,16 +124,22 @@ export function scoreFeatures(features) {
   const establishedCycleNodes = Math.max(0, features.targetSccSize - 1)
     + (features.targetHasSelfCycle ? 1 : 0);
   const cyclicContext = 1 - Math.exp(-establishedCycleNodes / 2);
+  const cycleBreadth = normalizedLog(features.cycleRegionSize, 8);
+  const cycleMagnitude = returnStrength * (0.90 + 0.10 * cycleBreadth);
 
-  const raw = 0.01
-    + 0.10 * growth
-    + 0.04 * affected
-    + 0.28 * redundancy
-    + 0.58 * returnStrength
-    + 0.18 * cyclicContext
-    + 0.12 * repeat
-    + 0.06 * fanIn
-    + 0.04 * fanOut;
+  // Percentages are deliberately separated by structural meaning. Return
+  // closure dominates, alternate/shortened routes are intermediate, and
+  // local degree or repeats can refine but never overwhelm path structure.
+  const raw = 0.005
+    + 0.12 * growth
+    + 0.03 * affected
+    + 0.20 * routeCapacity
+    + 0.05 * distanceImprovement
+    + 0.42 * cycleMagnitude
+    + 0.10 * cyclicContext
+    + 0.025 * repeat
+    + 0.03 * fanIn
+    + 0.015 * fanOut;
 
   return roundScore(Math.max(0, Math.min(1, raw)));
 }
