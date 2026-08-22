@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import random
 import unittest
+from unittest.mock import patch
 
 from bot import (
     OPPONENTS,
@@ -249,6 +250,13 @@ class Phase3BotTests(unittest.TestCase):
         self.assertEqual(diagnostics["live_opponents"], 5)
         self.assertEqual(diagnostics["target_delta"], 13)
         self.assertEqual(diagnostics["leader_delta"], 12)
+        self.assertEqual(diagnostics["action"], action)
+
+    def test_diagnostics_reuse_the_decision_equity(self):
+        data = request(round="post_reveal", community_number=7)
+        action = decide(data)
+        with patch("bot._multiway_equity", side_effect=AssertionError("recomputed")):
+            diagnostics = decision_diagnostics(data, action)
         self.assertEqual(diagnostics["action"], action)
 
     def test_concurrent_duplicate_requests_are_safe(self):

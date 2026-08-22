@@ -123,6 +123,7 @@ class OpponentRegistry:
 
 
 OPPONENTS = OpponentRegistry()
+_DECISION_CONTEXT = threading.local()
 
 
 def _actions_in_round(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -371,6 +372,7 @@ def _aggress(data: Dict[str, Any], fraction: float) -> Action:
 
 
 def decide(data: Dict[str, Any]) -> Action:
+    _DECISION_CONTEXT.value = None
     legal = set(data.get("legal_actions") or [])
     if not legal:
         return {"action": "check"}
@@ -389,6 +391,13 @@ def decide(data: Dict[str, Any]) -> Action:
     hands_left = max(0, total - hand)
     to_call = max(0, int(data.get("to_call", 0)))
     n = max(1, opponent_count)
+    _DECISION_CONTEXT.value = {
+        "request": data,
+        "model": model,
+        "equity": equity,
+        "confidence": confidence,
+        "opponents": opponent_count,
+    }
 
     if to_call > 0:
         pot = max(0, int(data.get("pot", 0)))
@@ -457,9 +466,16 @@ def decide(data: Dict[str, Any]) -> Action:
 
 
 def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]:
-    model = RULES.model_for(data)
-    profiles = OPPONENTS.ingest(data)
-    equity, confidence, opponents = _multiway_equity(data, model, profiles)
+    cached = getattr(_DECISION_CONTEXT, "value", None)
+    if cached is not None and cached.get("request") is data:
+        model = cached["model"]
+        equity = cached["equity"]
+        confidence = cached["confidence"]
+        opponents = cached["opponents"]
+    else:
+        model = RULES.model_for(data)
+        profiles = OPPONENTS.ingest(data)
+        equity, confidence, opponents = _multiway_equity(data, model, profiles)
     hero = _hero(data)
     info = model.diagnostics()
     leader = max((int(player.get("chip_delta", -200)) for player in _opponents(data)), default=-200)

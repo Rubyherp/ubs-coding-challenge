@@ -139,6 +139,9 @@ class RuleModel:
         self._seen: set[tuple[Any, ...]] = set()
         self._seen_order: deque[tuple[Any, ...]] = deque()
         self._exact: Dict[tuple[int, int, int], list[int]] = {}
+        self._weights_cache: Optional[list[float]] = None
+        self._outcome_cache: Dict[tuple[int, int, int], tuple[float, float, float]] = {}
+        self._equity_cache: Dict[tuple[int, Optional[int]], tuple[float, float]] = {}
         self.observation_count = 0
 
     @staticmethod
@@ -167,19 +170,29 @@ class RuleModel:
             oriented = outcome * orientation
             counts = self._exact.setdefault(key, [0, 0, 0])  # win, tie, loss
             counts[0 if oriented > 0 else 1 if oriented == 0 else 2] += 1
+            self._weights_cache = None
+            self._outcome_cache.clear()
+            self._equity_cache.clear()
             return True
 
     def _weights(self) -> list[float]:
+        if self._weights_cache is not None:
+            return self._weights_cache
         peak = max(self._log_weights)
         raw = [math.exp(max(-700.0, value - peak)) for value in self._log_weights]
         total = sum(raw)
-        return [value / total for value in raw]
+        self._weights_cache = [value / total for value in raw]
+        return self._weights_cache
 
     def outcome_probabilities(self, left: int, right: int,
                               community: int) -> tuple[float, float, float]:
         """Return probabilities of left winning, tying, and losing."""
 
         with self._lock:
+            cache_key = (left, right, community)
+            cached = self._outcome_cache.get(cache_key)
+            if cached is not None:
+                return cached
             key, orientation = self._exact_key(left, right, community)
             counts = self._exact.get(key)
             if counts and sum(counts):
@@ -187,18 +200,27 @@ class RuleModel:
                 if orientation < 0:
                     wins, losses = losses, wins
                 total = wins + ties + losses
-                return wins / total, ties / total, losses / total
+                result = wins / total, ties / total, losses / total
+                self._outcome_cache[cache_key] = result
+                return result
             result = [0.0, 0.0, 0.0]
             for weight, hypothesis in zip(self._weights(), HYPOTHESES):
                 outcome = hypothesis.compare(left, right, community)
                 result[0 if outcome > 0 else 1 if outcome == 0 else 2] += weight
-            return result[0], result[1], result[2]
+            probabilities = result[0], result[1], result[2]
+            self._outcome_cache[cache_key] = probabilities
+            return probabilities
 
     def compare_probability(self, left: int, right: int, community: int) -> float:
         win, tie, _ = self.outcome_probabilities(left, right, community)
         return win + tie * 0.5
 
     def equity(self, number: int, community: Optional[int]) -> tuple[float, float]:
+        cache_key = (number, community)
+        with self._lock:
+            cached = self._equity_cache.get(cache_key)
+            if cached is not None:
+                return cached
         communities: Iterable[int] = range(1, 14) if community is None else (community,)
         values = [
             self.compare_probability(number, opponent, shared)
@@ -211,7 +233,10 @@ class RuleModel:
             peak = max(weights)
             depth = 1.0 - math.exp(-self.observation_count / 5.0)
             confidence = depth * (0.35 + 0.65 * peak)
-        return equity, min(1.0, confidence)
+        result = equity, min(1.0, confidence)
+        with self._lock:
+            self._equity_cache[cache_key] = result
+        return result
 
     def diagnostics(self) -> Dict[str, Any]:
         with self._lock:

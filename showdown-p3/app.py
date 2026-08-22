@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from bot import decide, decision_diagnostics
@@ -51,16 +52,28 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError("request body must be an object")
             action = decide(payload)
-            try:
-                print(json.dumps(decision_diagnostics(payload, action),
-                                 separators=(",", ":"), sort_keys=True), flush=True)
-            except Exception:
-                pass
-            self._json(200, action)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self._json(400, {"error": str(exc)})
+            return
         except Exception:
-            self._json(500, {"error": "internal decision error"})
+            traceback.print_exc()
+            try:
+                self._json(500, {"error": "internal decision error"})
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
+        # The coordinator's five-second deadline applies to the response, so
+        # diagnostics must never sit on its critical path.
+        try:
+            self._json(200, action)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        try:
+            print(json.dumps(decision_diagnostics(payload, action),
+                             separators=(",", ":"), sort_keys=True), flush=True)
+        except Exception:
+            pass
 
     def log_message(self, fmt: str, *args: object) -> None:
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
