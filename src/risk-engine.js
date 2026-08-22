@@ -11,7 +11,7 @@ import { sameTransaction } from "./transaction.js";
 
 export const LOOKBACK_NS = 24n * 60n * 60n * 1_000_000_000n;
 const ISOLATED_RISK = 0.02;
-const SELF_LOOP_RISK = 0.995;
+const MAX_RISK = 0.995;
 const RISK_CALIBRATION_POINTS = [
   [0, 0],
   [0.02, 0.02],
@@ -52,9 +52,7 @@ export class RiskEngine {
       }
 
       const cutoff = this.#advanceTime(transaction.createdAtNs);
-      let riskScore = transaction.fromUserId === transaction.toUserId
-        ? SELF_LOOP_RISK
-        : ISOLATED_RISK;
+      let riskScore = ISOLATED_RISK;
 
       // Expired late arrivals receive the isolated baseline but cannot extend
       // or mutate any active path.
@@ -160,8 +158,6 @@ export function scoreTemporalChange({
   repetitions,
   priorLocalRecurrentMass
 }) {
-  if (source === target) return SELF_LOOP_RISK;
-
   const totalDelta = Math.max(0, after.totalMass - before.totalMass);
   const efficiencyDelta = Math.max(0, after.efficiency - before.efficiency);
   let redundancyDelta = Math.max(0, after.redundancy - before.redundancy);
@@ -187,7 +183,7 @@ export function scoreTemporalChange({
     raw += 0.98 * Math.log1p(4 * priorLocalRecurrentMass);
   }
 
-  const risk = roundScore(Math.max(0, Math.min(SELF_LOOP_RISK, 1 - Math.exp(-raw))));
+  const risk = roundScore(Math.max(0, Math.min(MAX_RISK, 1 - Math.exp(-raw))));
   return roundScore(calibrateRisk(risk));
 }
 
