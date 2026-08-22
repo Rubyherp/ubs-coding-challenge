@@ -32,7 +32,7 @@ For a prospective edge `u → v`, the engine examines the active graph before in
 3. **Return closure:** a pre-existing route from `v` back to `u` means the new edge closes a loop. Shorter return paths and multiple independent shortest routes increase the signal.
 4. **Cyclic context:** returning into an already strongly connected region is stronger than closing the first loop.
 5. **Fan-in/fan-out:** distinct counterparties converging on a destination or spreading from a source contribute a smaller signal even before a shared upstream route is visible.
-6. **Repeated edges:** parallel transfers add a smaller structural signal without being mistaken for independent graph routes.
+6. **Repeated edges:** parallel transfers receive only a small recurrence signal because they do not create or shorten a topological path.
 
 The weighted signal is clamped and rounded to a deterministic score in `[0, 1]`. The weights intentionally preserve the challenge's qualitative ordering: isolated edge, extension, convergence, return, then multiple return paths into an established loop.
 

@@ -97,6 +97,14 @@ export class RiskEngine {
 
 /** Map structural graph deltas to a stable relative score in [0, 1]. */
 export function scoreFeatures(features) {
+  // Another transaction over an existing topological edge does not create or
+  // shorten any entity-to-entity path. Keep a small recurrence signal, but do
+  // not let parallel volume outrank genuine graph growth in this phase.
+  if (features.existingEdgeCount > 0) {
+    const repeatOnly = 0.005 + 0.02 * (1 - Math.exp(-features.existingEdgeCount));
+    return roundScore(repeatOnly);
+  }
+
   const growth = normalizedLog(features.newPairs, 12);
   const affected = normalizedLog(features.affectedPairs, 32);
   const routeCapacity = normalizedLog(
@@ -133,13 +141,13 @@ export function scoreFeatures(features) {
   const raw = 0.005
     + 0.12 * growth
     + 0.03 * affected
-    + 0.20 * routeCapacity
+    + 0.18 * routeCapacity
     + 0.05 * distanceImprovement
     + 0.42 * cycleMagnitude
     + 0.10 * cyclicContext
     + 0.025 * repeat
-    + 0.03 * fanIn
-    + 0.015 * fanOut;
+    + 0.10 * fanIn
+    + 0.025 * fanOut;
 
   return roundScore(Math.max(0, Math.min(1, raw)));
 }

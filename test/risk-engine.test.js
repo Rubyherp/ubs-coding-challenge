@@ -197,6 +197,16 @@ test("fan-in and fan-out add signal even without a shared upstream path", () => 
 
   assert.ok(fanIn > isolated);
   assert.ok(fanOut > isolated);
+  assert.ok(fanIn > scoreSequence([["a", "b"], ["b", "c"]]));
+});
+
+test("a parallel edge stays below genuine topological growth", () => {
+  const repeated = scoreSequence([["a", "b"], ["a", "b"]]);
+  const isolated = scoreSequence([["a", "b"]]);
+  const extension = scoreSequence([["a", "b"], ["b", "c"]]);
+
+  assert.ok(repeated < isolated);
+  assert.ok(repeated < extension);
 });
 
 test("reset restores startup-equivalent scoring and clears idempotency", () => {
