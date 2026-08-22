@@ -32,7 +32,7 @@ For a prospective edge `u → v`, the engine examines the active graph before in
 3. **Return closure:** a pre-existing route from `v` back to `u` means the new edge closes a loop. Shorter return paths and multiple independent shortest routes increase the signal.
 4. **Cyclic context:** returning into an already strongly connected region is stronger than closing the first loop.
 5. **Fan-in/fan-out:** distinct counterparties converging on a destination or spreading from a source contribute a smaller signal even before a shared upstream route is visible.
-6. **Repeated edges:** parallel transfers receive only a small recurrence signal because they do not create or shorten a topological path.
+6. **Repeated edges:** parallel transfers add a smaller structural signal without being mistaken for independent graph routes.
 
 The weighted signal is clamped and rounded to a deterministic score in `[0, 1]`. The weights intentionally preserve the challenge's qualitative ordering: isolated edge, extension, convergence, return, then multiple return paths into an established loop.
 
@@ -40,7 +40,7 @@ The weighted signal is clamped and rounded to a deterministic score in `[0, 1]`.
 
 - Arrival order defines state evolution, including for out-of-order timestamps.
 - The maximum `createdAt` seen is the event-time watermark.
-- An edge is active when `createdAt > watermark - 24 hours`; the rolling window is the half-open interval `(watermark - 24h, watermark]`.
+- An edge is active when `createdAt >= watermark - 24 hours`; expiration starts once it is strictly older than 24 hours.
 - A late transaction older than the current window receives a neutral score and does not mutate the active graph.
 - Active edges are held in a timestamp min-heap and expired incrementally. Parallel edges expire independently.
 - RFC 3339 timestamps are parsed at nanosecond precision, including numeric UTC offsets.

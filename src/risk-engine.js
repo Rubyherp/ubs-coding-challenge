@@ -34,9 +34,9 @@ export class RiskEngine {
       const cutoff = this.#watermarkNs - LOOKBACK_NS;
       let riskScore = 0;
 
-      // The active interval is (watermark - 24h, watermark]. An event on the
-      // lower boundary is no longer within the most recent 24 hours.
-      if (transaction.createdAtNs > cutoff) {
+      // Keep the exact lower boundary active. Expiration begins once an edge
+      // is strictly more than 24 hours behind the event-time watermark.
+      if (transaction.createdAtNs >= cutoff) {
         const features = this.#graph.analyzeEdge(transaction.fromUserId, transaction.toUserId);
         riskScore = scoreFeatures(features);
         this.#graph.addEdge(transaction.fromUserId, transaction.toUserId);
@@ -87,7 +87,7 @@ export class RiskEngine {
     if (this.#watermarkNs === null || createdAtNs > this.#watermarkNs) {
       this.#watermarkNs = createdAtNs;
       const cutoff = this.#watermarkNs - LOOKBACK_NS;
-      while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs <= cutoff) {
+      while (this.#expirations.size > 0 && this.#expirations.peek().createdAtNs < cutoff) {
         const expired = this.#expirations.pop();
         this.#graph.removeEdge(expired.from, expired.to);
       }
@@ -97,14 +97,6 @@ export class RiskEngine {
 
 /** Map structural graph deltas to a stable relative score in [0, 1]. */
 export function scoreFeatures(features) {
-  // Another transaction over an existing topological edge does not create or
-  // shorten any entity-to-entity path. Keep a small recurrence signal, but do
-  // not let parallel volume outrank genuine graph growth in this phase.
-  if (features.existingEdgeCount > 0) {
-    const repeatOnly = 0.005 + 0.02 * (1 - Math.exp(-features.existingEdgeCount));
-    return roundScore(repeatOnly);
-  }
-
   const growth = normalizedLog(features.newPairs, 12);
   const affected = normalizedLog(features.affectedPairs, 32);
   const routeCapacity = normalizedLog(
@@ -141,13 +133,13 @@ export function scoreFeatures(features) {
   const raw = 0.005
     + 0.12 * growth
     + 0.03 * affected
-    + 0.18 * routeCapacity
+    + 0.20 * routeCapacity
     + 0.05 * distanceImprovement
     + 0.42 * cycleMagnitude
     + 0.10 * cyclicContext
     + 0.025 * repeat
-    + 0.10 * fanIn
-    + 0.025 * fanOut;
+    + 0.03 * fanIn
+    + 0.015 * fanOut;
 
   return roundScore(Math.max(0, Math.min(1, raw)));
 }
