@@ -71,6 +71,26 @@ export class DirectedGraph {
     return seen;
   }
 
+  /** Nodes connected to start when edge direction is ignored. */
+  weaklyConnected(start) {
+    const seen = new Set([start]);
+    const queue = [start];
+    for (let index = 0; index < queue.length; index += 1) {
+      const node = queue[index];
+      const neighbors = [
+        ...(this.#out.get(node)?.keys() ?? []),
+        ...(this.#in.get(node)?.keys() ?? [])
+      ];
+      for (const neighbor of neighbors) {
+        if (!seen.has(neighbor)) {
+          seen.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+    return seen;
+  }
+
   /** Unweighted shortest distances, with the start node at distance zero. */
   distances(start, { reverse = false } = {}) {
     const adjacency = reverse ? this.#in : this.#out;

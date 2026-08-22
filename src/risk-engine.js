@@ -22,15 +22,6 @@ const RISK_CALIBRATION_POINTS = [
   [0.995, 0.995],
   [1, 1]
 ];
-const TOPOLOGY_CALIBRATION_POINTS = [
-  [0, 0],
-  [0.043375774426395182, 0.02],
-  [0.065824163401970295, 0.20],
-  [0.10449096501559951, 0.40],
-  [0.52925368416457896, 0.70],
-  [0.65758190936275840, 0.90],
-  [1, 1]
-];
 
 export class DuplicateConflictError extends Error {
   constructor(txId) {
@@ -68,26 +59,23 @@ export class RiskEngine {
       // Expired late arrivals receive the isolated baseline but cannot extend
       // or mutate any active path.
       if (transaction.createdAtNs > cutoff) {
-        const topology = this.#graph.analyzeEdge(
-          transaction.fromUserId,
-          transaction.toUserId
-        );
         const hadTemporalRoute = this.#temporal.shortest
           .get(transaction.toUserId)?.has(transaction.fromUserId) ?? false;
         const before = summarizeTemporalState(this.#temporal);
-        const priorTargetRecurrentMass = this.#temporal.recurrentByNode
-          .get(transaction.toUserId) ?? 0;
+        const priorLocalRecurrentMass = this.#localRecurrentMass(
+          transaction.fromUserId,
+          transaction.toUserId
+        );
         applyTemporalEdge(this.#temporal, transaction.fromUserId, transaction.toUserId);
-        const temporalRisk = scoreTemporalChange({
+        riskScore = scoreTemporalChange({
           source: transaction.fromUserId,
           target: transaction.toUserId,
           before,
           after: summarizeTemporalState(this.#temporal),
           hadTemporalRoute,
           repetitions: this.#graph.edgeCount(transaction.fromUserId, transaction.toUserId),
-          priorTargetRecurrentMass
+          priorLocalRecurrentMass
         });
-        riskScore = Math.max(temporalRisk, scoreTopologicalChange(topology));
 
         const sequence = this.#sequence++;
         const record = {
@@ -154,6 +142,13 @@ export class RiskEngine {
     return this.#watermarkNs - LOOKBACK_NS;
   }
 
+  #localRecurrentMass(source, target) {
+    const nodes = this.#graph.weaklyConnected(source);
+    for (const node of this.#graph.weaklyConnected(target)) nodes.add(node);
+    let mass = 0;
+    for (const node of nodes) mass += this.#temporal.recurrentByNode.get(node) ?? 0;
+    return mass;
+  }
 }
 
 export function scoreTemporalChange({
@@ -163,7 +158,7 @@ export function scoreTemporalChange({
   after,
   hadTemporalRoute,
   repetitions,
-  priorTargetRecurrentMass = 0
+  priorLocalRecurrentMass
 }) {
   if (source === target) return SELF_LOOP_RISK;
 
@@ -188,72 +183,17 @@ export function scoreTemporalChange({
   if (recurrentDelta > 0) {
     raw += 0.35;
     raw += 0.32 * Math.log1p(4 * recurrentDelta);
-    // Independent returns reinforce one another only when they converge on
-    // the same origin. Recurrence elsewhere is not evidence about this edge.
-    raw += 0.98 * Math.log1p(4 * priorTargetRecurrentMass);
+    raw += 0.98 * Math.log1p(4 * priorLocalRecurrentMass);
   }
 
   const risk = roundScore(Math.max(0, Math.min(SELF_LOOP_RISK, 1 - Math.exp(-raw))));
   return roundScore(calibrateRisk(risk));
 }
 
-/** Score the prospective edge's exact delta in the active directed graph. */
-export function scoreTopologicalChange(features) {
-  if (features.returnPath.exists && features.returnPath.distance === 0) {
-    return SELF_LOOP_RISK;
-  }
-
-  // A parallel edge does not create or shorten a distinct structural route.
-  // Its smaller behavioural contribution is handled by temporal scoring.
-  if (features.existingEdgeCount > 0) return ISOLATED_RISK;
-
-  const growth = normalizedLog(features.newPairs, 12);
-  const affected = normalizedLog(features.affectedPairs, 32);
-  const routeCapacity = normalizedLog(
-    1.25 * features.shortenedPairs
-      + 0.80 * features.equalAlternatePairs
-      + 0.30 * features.longerAlternatePairs,
-    12
-  );
-  const distanceImprovement = 1 - Math.exp(-features.relativeDistanceSavings / 2);
-  const fanIn = 1 - Math.exp(-features.targetInDegree / 2);
-
-  let returnStrength = 0;
-  if (features.returnPath.exists) {
-    const proximity = 1 / (1 + 0.12 * (features.returnPath.distance - 1));
-    const diversity = Math.min(
-      1,
-      Math.log2(1 + features.returnPath.pathCount) / Math.log2(9)
-    );
-    returnStrength = 0.82 * proximity + 0.18 * diversity;
-  }
-
-  const establishedCycleNodes = Math.max(0, features.targetSccSize - 1)
-    + (features.targetHasSelfCycle ? 1 : 0);
-  const cyclicContext = 1 - Math.exp(-establishedCycleNodes / 2);
-  const cycleBreadth = normalizedLog(features.cycleRegionSize, 8);
-  const cycleMagnitude = returnStrength * (0.90 + 0.10 * cycleBreadth);
-
-  const raw = 0.005
-    + 0.12 * growth
-    + 0.03 * affected
-    + 0.20 * routeCapacity
-    + 0.05 * distanceImprovement
-    + 0.42 * cycleMagnitude
-    + 0.10 * cyclicContext
-    + 0.03 * fanIn;
-
-  return roundScore(interpolateCalibration(raw, TOPOLOGY_CALIBRATION_POINTS));
-}
-
 export function calibrateRisk(value) {
-  return interpolateCalibration(value, RISK_CALIBRATION_POINTS);
-}
-
-function interpolateCalibration(value, points) {
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const [leftRaw, leftTarget] = points[index];
-    const [rightRaw, rightTarget] = points[index + 1];
+  for (let index = 0; index < RISK_CALIBRATION_POINTS.length - 1; index += 1) {
+    const [leftRaw, leftTarget] = RISK_CALIBRATION_POINTS[index];
+    const [rightRaw, rightTarget] = RISK_CALIBRATION_POINTS[index + 1];
     if (value <= rightRaw) {
       const span = rightRaw - leftRaw;
       if (span === 0) return rightTarget;
@@ -261,12 +201,7 @@ function interpolateCalibration(value, points) {
       return leftTarget + position * (rightTarget - leftTarget);
     }
   }
-  return points.at(-1)[1];
-}
-
-function normalizedLog(value, saturationPoint) {
-  if (value <= 0) return 0;
-  return Math.min(1, Math.log1p(value) / Math.log(saturationPoint + 1));
+  return RISK_CALIBRATION_POINTS.at(-1)[1];
 }
 
 function roundScore(value) {

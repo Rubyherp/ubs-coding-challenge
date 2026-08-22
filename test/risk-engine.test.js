@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DirectedGraph } from "../src/directed-graph.js";
-import {
-  calibrateRisk,
-  DuplicateConflictError,
-  RiskEngine,
-  scoreTemporalChange,
-  scoreTopologicalChange
-} from "../src/risk-engine.js";
+import { calibrateRisk, DuplicateConflictError, RiskEngine } from "../src/risk-engine.js";
 import { normalizeTransaction } from "../src/transaction.js";
 
 const BASE = "2026-06-08T12:00:00Z";
@@ -27,14 +21,6 @@ function scoreSequence(edges) {
     finalScore = result.riskScore;
   });
   return finalScore;
-}
-
-function permutations(values) {
-  if (values.length <= 1) return [values];
-  return values.flatMap((value, index) => permutations([
-    ...values.slice(0, index),
-    ...values.slice(index + 1)
-  ]).map((rest) => [value, ...rest]));
 }
 
 test("the five Phase 1 examples have coherent structural ordering", () => {
@@ -197,7 +183,7 @@ test("a self-transfer is treated as an immediate return loop", () => {
   assert.ok(self.riskScore > isolated * 5);
 });
 
-test("fan-in carries signal while unrelated fan-out stays at baseline", () => {
+test("unrelated fan-in and fan-out stay at the isolated baseline", () => {
   const isolatedEngine = new RiskEngine();
   const isolated = isolatedEngine.processBatch([transaction("isolated", "x", "sink")])[0].riskScore;
 
@@ -213,8 +199,7 @@ test("fan-in carries signal while unrelated fan-out stays at baseline", () => {
     transaction("out-2", "source", "b", "2026-06-08T12:01:00Z")
   ])[0].riskScore;
 
-  assert.ok(fanIn > isolated);
-  assert.ok(fanIn < scoreSequence([["a", "sink"], ["sink", "next"]]));
+  assert.equal(fanIn, isolated);
   assert.equal(fanOut, isolated);
 });
 
@@ -277,7 +262,7 @@ test("multiple returns score above a single similarly sized loop", () => {
   assert.ok(multiple > single);
 });
 
-test("an edge detects the new graph path through an earlier downstream edge", () => {
+test("an earlier-arriving downstream edge cannot be extended backward in arrival order", () => {
   const engine = new RiskEngine();
   const first = engine.processBatch([
     transaction("downstream-first", "b", "c", "2026-06-10T12:00:00Z")
@@ -287,41 +272,7 @@ test("an edge detects the new graph path through an earlier downstream edge", ()
   ])[0];
 
   assert.equal(first.riskScore, 0.02);
-  assert.equal(second.riskScore, 0.20);
-});
-
-test("a cycle is detected when component edges arrived out of path order", () => {
-  const engine = new RiskEngine();
-  engine.processBatch([transaction("downstream", "b", "c", "2026-06-10T12:00:00Z")]);
-  engine.processBatch([transaction("upstream", "a", "b", "2026-06-10T11:00:00Z")]);
-  const closure = engine.processBatch([
-    transaction("closure", "c", "a", "2026-06-10T13:00:00Z")
-  ])[0];
-
-  assert.ok(closure.riskScore > 0.40);
-});
-
-test("convergence and return topology survive every prior-edge permutation", () => {
-  const convergencePrior = [["m", "a"], ["m", "h"], ["a", "s"]];
-  for (const prior of permutations(convergencePrior)) {
-    assert.equal(scoreSequence([...prior, ["h", "s"]]), 0.40);
-  }
-
-  const returnPrior = [["m", "a"], ["a", "c"], ["c", "o"]];
-  for (const prior of permutations(returnPrior)) {
-    assert.equal(scoreSequence([...prior, ["o", "a"]]), 0.70);
-  }
-});
-
-test("expired downstream topology cannot create a phantom extension", () => {
-  const engine = new RiskEngine();
-  engine.processBatch([transaction("expired", "b", "c", "2026-06-08T00:00:00Z")]);
-  engine.processBatch([transaction("advance", "x", "y", "2026-06-09T00:00:00Z")]);
-  const candidate = engine.processBatch([
-    transaction("candidate", "a", "b", "2026-06-09T00:00:01Z")
-  ])[0];
-
-  assert.equal(candidate.riskScore, 0.02);
+  assert.equal(second.riskScore, 0.02);
 });
 
 test("a chronological onward edge extends an arrival-order path", () => {
@@ -360,39 +311,12 @@ test("disconnected recurrence does not raise an unrelated return", () => {
   assert.equal(afterRecurrence, standalone);
 });
 
-test("recurrence at the same origin raises a later return", () => {
+test("recurrence in the same component raises a later return", () => {
   const firstReturn = scoreSequence([["a", "b"], ["b", "c"], ["c", "a"]]);
   const laterReturn = scoreSequence([
     ["a", "b"], ["b", "c"], ["c", "a"], ["b", "d"], ["d", "a"]
   ]);
   assert.ok(laterReturn > firstReturn);
-});
-
-test("only recurrence at the return target reinforces temporal risk", () => {
-  const change = {
-    source: "y",
-    target: "x",
-    before: { totalMass: 1, efficiency: 1, redundancy: 0, recurrentMass: 0 },
-    after: { totalMass: 2, efficiency: 1.2, redundancy: 0.8, recurrentMass: 0.5 },
-    hadTemporalRoute: true,
-    repetitions: 0
-  };
-  const firstAtTarget = scoreTemporalChange({
-    ...change,
-    priorTargetRecurrentMass: 0
-  });
-  const establishedAtTarget = scoreTemporalChange({
-    ...change,
-    priorTargetRecurrentMass: 1
-  });
-
-  assert.ok(establishedAtTarget > firstAtTarget);
-});
-
-test("parallel edges have no topological delta", () => {
-  const graph = new DirectedGraph();
-  graph.addEdge("a", "b");
-  assert.equal(scoreTopologicalChange(graph.analyzeEdge("a", "b")), 0.02);
 });
 
 test("expiration rebuilds temporal paths from only the remaining arrivals", () => {

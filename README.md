@@ -25,15 +25,15 @@ npm run test:coverage
 
 ## Scoring model
 
-For a prospective edge `u → v`, the engine combines two views of the active
-graph:
+For a prospective edge `u → v`, the engine examines paths that reached `u`
+before the transaction arrived. A path can only be extended by later arrivals:
 
-1. **Topology delta:** exact ancestor × descendant analysis detects every new or shortened route, including paths through downstream edges that arrived earlier.
-2. **Path growth:** every arrival extends the decayed mass of arrival-order paths already ending at its source.
-3. **Convergence:** alternate routes and fan-in increase risk, with shared upstream reachability stronger than unrelated deposits.
+1. **Path growth:** every arrival extends the decayed mass of paths already ending at its source.
+2. **Efficiency:** newly reachable pairs and genuine shortcuts increase shortest-path efficiency.
+3. **Convergence:** additional routes increase redundancy without treating unrelated fan-in as a shared flow.
 4. **Return closure:** paths returning to their origin create recurrent mass, the dominant Phase 1 signal.
-5. **Established recurrence:** later returns receive a larger increment only when they converge on the same origin; recurrence elsewhere cannot leak risk.
-6. **Repeated edges:** parallel transfers add only a small temporal signal because they do not create distinct graph topology.
+5. **Established recurrence:** later returns inside the same connected transaction component receive a larger increment than the first loop; unrelated components cannot leak risk into one another.
+6. **Repeated edges:** parallel transfers add only a small signal unless they participate in recurrence.
 
 Path contributions decay by `0.72` per hop. A monotonic calibration maps the five
 reference tiers to `0.02`, `0.20`, `0.40`, `0.70`, and `0.90` while retaining
