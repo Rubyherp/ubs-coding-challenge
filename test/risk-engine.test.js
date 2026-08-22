@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DirectedGraph } from "../src/directed-graph.js";
-import { calibrateRisk, DuplicateConflictError, RiskEngine } from "../src/risk-engine.js";
+import {
+  calibrateRisk,
+  DuplicateConflictError,
+  jitterAmbiguousBaseline,
+  RiskEngine
+} from "../src/risk-engine.js";
 import { normalizeTransaction } from "../src/transaction.js";
 
 const BASE = "2026-06-08T12:00:00Z";
@@ -199,8 +204,8 @@ test("unrelated fan-in and fan-out stay at the isolated baseline", () => {
     transaction("out-2", "source", "b", "2026-06-08T12:01:00Z")
   ])[0].riskScore;
 
-  assert.equal(fanIn, isolated);
-  assert.equal(fanOut, isolated);
+  assert.ok(Math.abs(fanIn - isolated) <= 0.002);
+  assert.ok(Math.abs(fanOut - isolated) <= 0.002);
 });
 
 test("reset restores startup-equivalent scoring and clears idempotency", () => {
@@ -262,7 +267,7 @@ test("multiple returns score above a single similarly sized loop", () => {
   assert.ok(multiple > single);
 });
 
-test("an earlier-arriving downstream edge cannot be extended backward in arrival order", () => {
+test("an earlier-arriving downstream edge remains in the ambiguity band", () => {
   const engine = new RiskEngine();
   const first = engine.processBatch([
     transaction("downstream-first", "b", "c", "2026-06-10T12:00:00Z")
@@ -272,7 +277,7 @@ test("an earlier-arriving downstream edge cannot be extended backward in arrival
   ])[0];
 
   assert.equal(first.riskScore, 0.02);
-  assert.equal(second.riskScore, 0.02);
+  assert.ok(Math.abs(second.riskScore - 0.02) <= 0.002);
 });
 
 test("a chronological onward edge extends an arrival-order path", () => {
@@ -296,8 +301,23 @@ test("repeating an edge inside a cycle outranks repeating an isolated edge", () 
   const isolated = scoreSequence([["a", "b"]]);
   const isolatedRepeat = scoreSequence([["a", "b"], ["a", "b"]]);
   const recurrentRepeat = scoreSequence([["a", "b"], ["b", "a"], ["a", "b"]]);
-  assert.equal(isolatedRepeat, isolated);
+  assert.ok(Math.abs(isolatedRepeat - isolated) <= 0.002);
   assert.ok(recurrentRepeat > isolatedRepeat);
+});
+
+test("ambiguity jitter is bounded and deterministic across reset", () => {
+  assert.equal(jitterAmbiguousBaseline("same-id"), jitterAmbiguousBaseline("same-id"));
+  assert.ok(Math.abs(jitterAmbiguousBaseline("same-id") - 0.02) <= 0.002);
+
+  const engine = new RiskEngine();
+  const sequence = () => engine.processBatch([
+    transaction("context", "a", "b"),
+    transaction("ambiguous", "x", "y", "2026-06-08T12:01:00Z")
+  ]);
+  const first = sequence();
+  engine.reset();
+  const replay = sequence();
+  assert.deepEqual(replay, first);
 });
 
 test("disconnected recurrence does not raise an unrelated return", () => {

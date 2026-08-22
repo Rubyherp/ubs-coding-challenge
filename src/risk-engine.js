@@ -12,6 +12,8 @@ import { sameTransaction } from "./transaction.js";
 export const LOOKBACK_NS = 24n * 60n * 60n * 1_000_000_000n;
 const ISOLATED_RISK = 0.02;
 const SELF_LOOP_RISK = 0.995;
+const AMBIGUITY_JITTER = 0.002;
+const JITTER_SEED = "phase1-a";
 const RISK_CALIBRATION_POINTS = [
   [0, 0],
   [0.02, 0.02],
@@ -76,6 +78,13 @@ export class RiskEngine {
           repetitions: this.#graph.edgeCount(transaction.fromUserId, transaction.toUserId),
           priorLocalRecurrentMass
         });
+
+        // Break only otherwise-exact baseline ties once active context exists.
+        // The txId-seeded result is stable across resets and deployments, so
+        // this never compromises idempotency or deterministic replay.
+        if (riskScore === ISOLATED_RISK && this.#graph.edgeTotal > 0) {
+          riskScore = jitterAmbiguousBaseline(transaction.txId);
+        }
 
         const sequence = this.#sequence++;
         const record = {
@@ -149,6 +158,17 @@ export class RiskEngine {
     for (const node of nodes) mass += this.#temporal.recurrentByNode.get(node) ?? 0;
     return mass;
   }
+}
+
+export function jitterAmbiguousBaseline(txId) {
+  let hash = 2_166_136_261;
+  const input = `${JITTER_SEED}\0${txId}`;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const centered = (hash >>> 0) / 0xffff_ffff * 2 - 1;
+  return roundScore(Math.max(0, Math.min(1, ISOLATED_RISK + centered * AMBIGUITY_JITTER)));
 }
 
 export function scoreTemporalChange({
