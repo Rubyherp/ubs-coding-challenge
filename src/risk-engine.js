@@ -178,7 +178,8 @@ export function scoreTemporalChange({
   raw += 0.27 * Math.log1p(excessPathMass);
   raw += 0.22 * Math.log1p(newOrShorterMass);
   raw += 0.90 * Math.log1p(redundancyDelta);
-  if (repetitions > 0) raw += 0.035 * Math.log1p(repetitions);
+  // A parallel edge alone does not add structural capacity. Repeats gain risk
+  // only when they extend or reinforce a converging/returning temporal path.
 
   if (recurrentDelta > 0) {
     raw += 0.35;

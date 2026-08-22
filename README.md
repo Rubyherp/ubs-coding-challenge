@@ -33,7 +33,7 @@ before the transaction arrived. A path can only be extended by later arrivals:
 3. **Convergence:** additional routes increase redundancy without treating unrelated fan-in as a shared flow.
 4. **Return closure:** paths returning to their origin create recurrent mass, the dominant Phase 1 signal.
 5. **Established recurrence:** later returns inside the same connected transaction component receive a larger increment than the first loop; unrelated components cannot leak risk into one another.
-6. **Repeated edges:** parallel transfers add only a small signal unless they participate in recurrence.
+6. **Repeated edges:** parallel transfers remain neutral unless they extend or reinforce a converging or returning temporal path.
 
 Path contributions decay by `0.72` per hop. A monotonic calibration maps the five
 reference tiers to `0.02`, `0.20`, `0.40`, `0.70`, and `0.90` while retaining

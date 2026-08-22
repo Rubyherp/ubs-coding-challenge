@@ -293,8 +293,10 @@ test("a shortcut outranks an ordinary extension", () => {
 });
 
 test("repeating an edge inside a cycle outranks repeating an isolated edge", () => {
+  const isolated = scoreSequence([["a", "b"]]);
   const isolatedRepeat = scoreSequence([["a", "b"], ["a", "b"]]);
   const recurrentRepeat = scoreSequence([["a", "b"], ["b", "a"], ["a", "b"]]);
+  assert.equal(isolatedRepeat, isolated);
   assert.ok(recurrentRepeat > isolatedRepeat);
 });
 
