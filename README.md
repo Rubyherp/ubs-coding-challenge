@@ -25,16 +25,19 @@ npm run test:coverage
 
 ## Scoring model
 
-For a prospective edge `u → v`, the engine examines the active graph before inserting it:
+For a prospective edge `u → v`, the engine examines paths that reached `u`
+before the transaction arrived. A path can only be extended by later arrivals:
 
-1. **Reachability growth:** the Cartesian product of nodes that can reach `u` and nodes reachable from `v` describes the routes the edge can create.
-2. **Convergence and shortening:** each affected pair is classified as newly reachable, shortened, an equal-length alternate route, or a longer alternate route. These contribute different weights.
-3. **Return closure:** a pre-existing route from `v` back to `u` means the new edge closes a loop. Shorter return paths and multiple independent shortest routes increase the signal.
-4. **Cyclic context:** returning into an already strongly connected region is stronger than closing the first loop.
-5. **Fan-in/fan-out:** distinct counterparties converging on a destination or spreading from a source contribute a smaller signal even before a shared upstream route is visible.
-6. **Repeated edges:** parallel transfers add a smaller structural signal without being mistaken for independent graph routes.
+1. **Path growth:** every arrival extends the decayed mass of paths already ending at its source.
+2. **Efficiency:** newly reachable pairs and genuine shortcuts increase shortest-path efficiency.
+3. **Convergence:** additional routes increase redundancy without treating unrelated fan-in as a shared flow.
+4. **Return closure:** paths returning to their origin create recurrent mass, the dominant Phase 1 signal.
+5. **Established recurrence:** later independent returns receive a larger increment than the first loop.
+6. **Repeated edges:** parallel transfers add only a small signal unless they participate in recurrence.
 
-The weighted signal is clamped and rounded to a deterministic score in `[0, 1]`. The weights intentionally preserve the challenge's qualitative ordering: isolated edge, extension, convergence, return, then multiple return paths into an established loop.
+Path contributions decay by `0.72` per hop. A monotonic calibration maps the five
+reference tiers to `0.02`, `0.20`, `0.40`, `0.70`, and `0.90` while retaining
+headroom for stronger structures.
 
 ## Streaming and time semantics
 

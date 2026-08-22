@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DirectedGraph } from "../src/directed-graph.js";
-import { DuplicateConflictError, RiskEngine, scoreFeatures } from "../src/risk-engine.js";
+import { calibrateRisk, DuplicateConflictError, RiskEngine } from "../src/risk-engine.js";
 import { normalizeTransaction } from "../src/transaction.js";
 
 const BASE = "2026-06-08T12:00:00Z";
@@ -51,6 +51,10 @@ test("the five Phase 1 examples have coherent structural ordering", () => {
   assert.ok(convergence < returning, `${convergence} should be below ${returning}`);
   assert.ok(returning < multiLoop, `${returning} should be below ${multiLoop}`);
   assert.ok(multiLoop < 1, "complex patterns should retain headroom for stronger structures");
+  assert.deepEqual(
+    [isolated, extension, convergence, returning, multiLoop],
+    [0.02, 0.20, 0.40, 0.70, 0.90]
+  );
   for (const score of [isolated, extension, convergence, returning, multiLoop]) {
     assert.ok(score >= 0 && score <= 1);
   }
@@ -156,7 +160,7 @@ test("too-old late arrivals are neutral and never mutate the graph", () => {
   engine.processBatch([transaction("watermark", "a", "b", "2026-06-10T00:00:00Z")]);
   const stale = engine.processBatch([transaction("stale", "b", "a", "2026-06-08T23:59:59Z")])[0];
 
-  assert.equal(stale.riskScore, 0);
+  assert.equal(stale.riskScore, 0.02);
   assert.equal(engine.diagnostics().activeTransactions, 1);
 });
 
@@ -179,7 +183,7 @@ test("a self-transfer is treated as an immediate return loop", () => {
   assert.ok(self.riskScore > isolated * 5);
 });
 
-test("fan-in and fan-out add signal even without a shared upstream path", () => {
+test("unrelated fan-in and fan-out stay at the isolated baseline", () => {
   const isolatedEngine = new RiskEngine();
   const isolated = isolatedEngine.processBatch([transaction("isolated", "x", "sink")])[0].riskScore;
 
@@ -195,8 +199,8 @@ test("fan-in and fan-out add signal even without a shared upstream path", () => 
     transaction("out-2", "source", "b", "2026-06-08T12:01:00Z")
   ])[0].riskScore;
 
-  assert.ok(fanIn > isolated);
-  assert.ok(fanOut > isolated);
+  assert.equal(fanIn, isolated);
+  assert.equal(fanOut, isolated);
 });
 
 test("reset restores startup-equivalent scoring and clears idempotency", () => {
@@ -248,19 +252,84 @@ test("path deltas distinguish new, shortened, equal, and longer routes", () => {
   assert.equal(longerFeatures.longerAlternatePairs, 1);
 });
 
-test("multiple independent return paths score above a single return path", () => {
-  const single = new DirectedGraph();
-  single.addEdge("target", "left");
-  single.addEdge("left", "source");
+test("multiple returns score above a single similarly sized loop", () => {
+  const single = scoreSequence([
+    ["a", "b"], ["b", "c"], ["c", "d"], ["d", "a"]
+  ]);
+  const multiple = scoreSequence([
+    ["a", "b"], ["b", "c"], ["c", "a"], ["b", "d"], ["d", "a"]
+  ]);
+  assert.ok(multiple > single);
+});
 
-  const multiple = new DirectedGraph();
-  multiple.addEdge("target", "left");
-  multiple.addEdge("target", "right");
-  multiple.addEdge("left", "source");
-  multiple.addEdge("right", "source");
+test("an earlier-arriving downstream edge cannot be extended backward in arrival order", () => {
+  const engine = new RiskEngine();
+  const first = engine.processBatch([
+    transaction("downstream-first", "b", "c", "2026-06-10T12:00:00Z")
+  ])[0];
+  const second = engine.processBatch([
+    transaction("upstream-later", "a", "b", "2026-06-10T11:00:00Z")
+  ])[0];
 
-  assert.ok(
-    scoreFeatures(multiple.analyzeEdge("source", "target"))
-      > scoreFeatures(single.analyzeEdge("source", "target"))
-  );
+  assert.equal(first.riskScore, 0.02);
+  assert.equal(second.riskScore, 0.02);
+});
+
+test("a chronological onward edge extends an arrival-order path", () => {
+  const engine = new RiskEngine();
+  engine.processBatch([transaction("upstream", "a", "b", "2026-06-10T11:00:00Z")]);
+  const onward = engine.processBatch([
+    transaction("downstream", "b", "c", "2026-06-10T12:00:00Z")
+  ])[0];
+  assert.equal(onward.riskScore, 0.20);
+});
+
+test("a shortcut outranks an ordinary extension", () => {
+  const extension = scoreSequence([["a", "b"], ["b", "c"]]);
+  const shortcut = scoreSequence([
+    ["a", "b"], ["b", "c"], ["c", "d"], ["a", "d"]
+  ]);
+  assert.ok(shortcut > extension);
+});
+
+test("repeating an edge inside a cycle outranks repeating an isolated edge", () => {
+  const isolatedRepeat = scoreSequence([["a", "b"], ["a", "b"]]);
+  const recurrentRepeat = scoreSequence([["a", "b"], ["b", "a"], ["a", "b"]]);
+  assert.ok(recurrentRepeat > isolatedRepeat);
+});
+
+test("established recurrence raises a later independent return", () => {
+  const standalone = scoreSequence([["a", "b"], ["b", "a"]]);
+
+  const engine = new RiskEngine();
+  engine.processBatch([transaction("prior-loop", "prior", "prior")]);
+  engine.processBatch([transaction("outbound", "a", "b", "2026-06-08T12:01:00Z")]);
+  const afterRecurrence = engine.processBatch([
+    transaction("return", "b", "a", "2026-06-08T12:02:00Z")
+  ])[0].riskScore;
+
+  assert.ok(afterRecurrence > standalone);
+});
+
+test("expiration rebuilds temporal paths from only the remaining arrivals", () => {
+  const engine = new RiskEngine();
+  engine.processBatch([transaction("expired-prefix", "a", "b", "2026-06-08T00:00:00Z")]);
+  engine.processBatch([transaction("remaining-edge", "b", "c", "2026-06-08T01:00:00Z")]);
+  engine.processBatch([transaction("advance", "x", "y", "2026-06-09T00:00:00.000000001Z")]);
+
+  const candidate = engine.processBatch([
+    transaction("candidate", "c", "a", "2026-06-09T00:01:00Z")
+  ])[0].riskScore;
+
+  assert.equal(candidate, 0.20);
+  assert.equal(engine.diagnostics().activeTransactions, 3);
+});
+
+test("risk calibration is monotonic", () => {
+  let previous = 0;
+  for (let index = 0; index <= 1_000; index += 1) {
+    const calibrated = calibrateRisk(index / 1_000);
+    assert.ok(calibrated >= previous);
+    previous = calibrated;
+  }
 });
