@@ -272,6 +272,14 @@ def _target_delta(data: Dict[str, Any]) -> int:
     return 25 if int(data.get("phase", 2)) >= 2 else 10
 
 
+def _current_commitment(data: Dict[str, Any], delta: int) -> int:
+    """Chips already exposed in this hand, including the posted blind."""
+
+    starting_stack = int(data.get("starting_stack", 200))
+    current_stack = int(data.get("your_stack", starting_stack + delta))
+    return max(0, starting_stack + delta - current_stack)
+
+
 def _can_lock_clear(data: Dict[str, Any]) -> bool:
     target_stack = int(data.get("starting_stack", 200)) + _target_delta(data)
     return int(data.get("your_stack", 0)) >= target_stack + _future_forced_cost(data)
@@ -369,9 +377,23 @@ def decide(data: Dict[str, Any]) -> Action:
             # against opponents that repeatedly min-bet but only re-raise with
             # the top of their range.
             risk_premium += 0.035
-        if delta >= target and hands_left <= 12:
-            risk_premium += 0.07
-        risk_premium -= min(0.06, catch_up * 0.08)
+        if delta >= target:
+            risk_premium += 0.05
+            if hands_left <= 12:
+                risk_premium += 0.04
+        # Being behind near the end justifies a little more variance, but never
+        # turns a marginal call into a sequence of large negative-EV chases.
+        if hands_left <= 6:
+            risk_premium -= min(0.015, catch_up * 0.02)
+
+        # Once the leg is clearing, do not call when the total chips exposed in
+        # the hand exceed the surplus above +25.  Folding preserves the target;
+        # later blinds may briefly move us below it, at which point normal value
+        # play resumes without risking the whole lead in one pot.
+        if delta >= target:
+            surplus = delta - target
+            if _current_commitment(data, delta) + to_call > surplus:
+                return _safe_exit(data)
 
         # Never inflate a multi-raise pot on model equity alone.  In a two-card
         # game the opponent's second aggressive action is exceptionally strong
@@ -426,20 +448,34 @@ def decide(data: Dict[str, Any]) -> Action:
 
     # With no price to continue, use learned equity rather than raw rank: under
     # opaque rules a 13 is not inherently strong and a pair is not guaranteed.
+    protecting_lead = delta >= target
     if round_name == "pre_reveal":
-        if equity >= 0.72 + 0.05 * (1.0 - confidence):
+        strong_threshold = 0.82 if protecting_lead else 0.72
+        medium_threshold = 0.70 if protecting_lead else 0.61
+        if equity >= strong_threshold + 0.05 * (1.0 - confidence):
             return _aggress(data, 0.52)
-        if equity >= 0.61 + 0.03 * (1.0 - confidence):
+        if equity >= medium_threshold + 0.03 * (1.0 - confidence):
             return _aggress(data, 0.34)
+        if protecting_lead:
+            return _safe_exit(data)
         bluff_rate = 0.02 + max(0.0, stats["fold_rate"] - 0.38) * 0.20
         if equity <= 0.32 and _roll(data, "pre-bluff") < bluff_rate:
             return _aggress(data, 0.30)
         return _safe_exit(data)
 
-    if equity >= 0.79 + 0.04 * (1.0 - confidence):
-        return _aggress(data, 0.66, shove=equity >= 0.97 and confidence >= 0.60)
-    if equity >= 0.63 + 0.03 * (1.0 - confidence):
+    strong_threshold = 0.89 if protecting_lead else 0.79
+    medium_threshold = 0.74 if protecting_lead else 0.63
+    if equity >= strong_threshold + 0.04 * (1.0 - confidence):
+        return _aggress(
+            data,
+            0.50 if protecting_lead else 0.66,
+            shove=not protecting_lead and equity >= 0.97 and confidence >= 0.60,
+        )
+    if equity >= medium_threshold + 0.03 * (1.0 - confidence):
         return _aggress(data, 0.40)
+
+    if protecting_lead:
+        return _safe_exit(data)
 
     bluff_rate = 0.03 + max(0.0, stats["fold_rate"] - 0.35) * 0.27
     if delta < target and hands_left <= 10:
@@ -469,6 +505,9 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         "delta": hero.get("chip_delta"),
         "pot": data.get("pot"),
         "to_call": data.get("to_call"),
+        "your_stack": data.get("your_stack"),
+        "committed": _current_commitment(data, int(hero.get("chip_delta", 0))),
+        "opponent_aggression": _opponent_aggression_count(data),
         "equity": round(equity, 4),
         "confidence": round(confidence, 4),
         "observations": model_info["observations"],

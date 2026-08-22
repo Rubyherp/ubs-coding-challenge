@@ -224,6 +224,61 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(decide(data), {"action": "fold"})
 
+    def test_cinnabar_clear_lead_is_not_risked_in_one_pot(self):
+        data = request(
+            match_id="phase2-replay-cinnabar-lead",
+            table_rule="cinnabar",
+            hand_number=8,
+            round="post_reveal",
+            your_number=12,
+            community_number=8,
+            your_stack=236,
+            pot=32,
+            to_call=14,
+            min_raise_to=46,
+            max_raise_to=236,
+            legal_actions=["fold", "call", "raise"],
+            players=[
+                {"seat": 0, "name": "you", "chip_delta": 45, "bet_this_round": 4},
+                {"seat": 1, "name": "Nadia", "chip_delta": -45, "bet_this_round": 18},
+            ],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 0, "action": "bet", "amount": 4},
+                {"round": "post_reveal", "seat": 1, "action": "raise", "amount": 14},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
+    def test_late_deficit_does_not_force_marginal_verdigris_call(self):
+        aggressive = [
+            {"round": "post_reveal", "seat": 1, "action": "bet", "amount": 19}
+        ]
+        history = [
+            shown_hand(index, 9, opponent, 1, 1, aggressive)
+            for index, opponent in enumerate((13, 12, 13, 12), 1)
+        ]
+        data = request(
+            match_id="phase2-replay-verdigris-late",
+            table_rule="verdigris",
+            hand_number=34,
+            round="post_reveal",
+            your_number=9,
+            community_number=1,
+            your_stack=177,
+            pot=43,
+            to_call=19,
+            min_raise_to=62,
+            max_raise_to=177,
+            legal_actions=["fold", "call", "raise"],
+            players=[
+                {"seat": 0, "name": "you", "chip_delta": -4, "bet_this_round": 0},
+                {"seat": 1, "name": "Nadia", "chip_delta": 4, "bet_this_round": 19},
+            ],
+            current_hand_actions=aggressive,
+            recent_hands=history,
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
     def test_obsidian_low_non_pair_value_bets_immediately(self):
         data = request(
             table_rule="obsidian",
