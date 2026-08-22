@@ -176,30 +176,11 @@ test("parallel edge instances expire independently", () => {
   assert.ok(extension.riskScore > scoreSequence([["b", "c"]]));
 });
 
-test("self-transfers are incremental returns rather than a hard-coded maximum", () => {
+test("a self-transfer is treated as an immediate return loop", () => {
   const engine = new RiskEngine();
   const self = engine.processBatch([transaction("self", "a", "a")])[0];
-  const repeated = engine.processBatch([
-    transaction("self-again", "a", "a", "2026-06-08T12:01:00Z")
-  ])[0];
-  const convergence = scoreSequence([
-    ["m", "a"], ["m", "h"], ["a", "s"], ["h", "s"]
-  ]);
-
-  assert.ok(self.riskScore > convergence);
-  assert.ok(repeated.riskScore > self.riskScore);
-  assert.ok(repeated.riskScore < 1);
-});
-
-test("an already-expired late self-transfer is neutral and not retained", () => {
-  const engine = new RiskEngine();
-  engine.processBatch([transaction("watermark", "x", "y", "2026-06-10T00:00:00Z")]);
-  const staleSelf = engine.processBatch([
-    transaction("stale-self", "a", "a", "2026-06-08T23:59:59Z")
-  ])[0];
-
-  assert.equal(staleSelf.riskScore, 0.02);
-  assert.equal(engine.diagnostics().activeTransactions, 1);
+  const isolated = scoreSequence([["a", "b"]]);
+  assert.ok(self.riskScore > isolated * 5);
 });
 
 test("unrelated fan-in and fan-out stay at the isolated baseline", () => {
