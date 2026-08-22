@@ -319,6 +319,27 @@ def _value_fraction(
     return fraction
 
 
+def _force_double(
+    data: Dict[str, Any], equity: float, showdown_safety: float
+) -> bool:
+    """Whether normal pot growth can no longer plausibly reach first place."""
+
+    if data.get("round") != "post_reveal" or _is_clearing(data):
+        return False
+    pressure = _objective_pressure(data)
+    if pressure < 0.88 or equity < 0.68 or showdown_safety < 0.80:
+        return False
+    delta = int(_hero(data).get("chip_delta", 0))
+    gap = _objective_target(data) - delta
+    stack = max(1, int(data.get("your_stack", 1)))
+    hand = max(1, int(data.get("hand_number", 1)))
+    total = max(hand, int(data.get("total_hands", 60)))
+    hands_remaining = total - hand + 1
+    pot = max(1, int(data.get("pot", 1)))
+    ordinary_capacity = hands_remaining * max(8, 2 * pot)
+    return gap > max(round(0.75 * stack), ordinary_capacity)
+
+
 def _future_forced_cost(data: Dict[str, Any]) -> int:
     hero_seat = int(data.get("your_seat", 0))
     active = sorted(
@@ -400,12 +421,15 @@ def _safe_exit(data: Dict[str, Any]) -> Action:
     return _fallback(data)
 
 
-def _aggress(data: Dict[str, Any], fraction: float) -> Action:
+def _aggress(data: Dict[str, Any], fraction: float, *, shove: bool = False) -> Action:
     legal = set(data.get("legal_actions") or [])
     preferred = "raise" if int(data.get("to_call", 0)) > 0 else "bet"
     for kind in (preferred, "raise", "bet"):
         if kind in legal:
-            return {"action": kind, "amount": _amount(data, fraction)}
+            return {
+                "action": kind,
+                "amount": _amount(data, 1_000.0 if shove else fraction),
+            }
     return {"action": "call"} if "call" in legal else _fallback(data)
 
 
@@ -427,6 +451,7 @@ def decide(data: Dict[str, Any]) -> Action:
     target = _objective_target(data)
     protecting = delta >= target
     objective_pressure = _objective_pressure(data)
+    force_double = _force_double(data, equity, showdown_safety)
     hand = int(data.get("hand_number", 1))
     total = int(data.get("total_hands", 60))
     hands_left = max(0, total - hand)
@@ -440,6 +465,7 @@ def decide(data: Dict[str, Any]) -> Action:
         "opponents": opponent_count,
         "showdown_safety": showdown_safety,
         "objective_pressure": objective_pressure,
+        "force_double": force_double,
     }
 
     if to_call > 0:
@@ -475,6 +501,8 @@ def decide(data: Dict[str, Any]) -> Action:
                 risk -= 0.025 * objective_pressure
 
         severe = aggression_count >= 2 or to_call >= max(25, round(stack * 0.30))
+        if force_double and ("raise" in legal or "bet" in legal):
+            return _aggress(data, 1.0, shove=True)
         if severe:
             profitable = equity + 1e-9 >= pot_odds + max(0.0, risk)
             safe_split = (
@@ -509,6 +537,8 @@ def decide(data: Dict[str, Any]) -> Action:
     uncertainty = 0.05 * (1.0 - confidence)
     strong -= 0.12 * objective_pressure
     medium -= 0.10 * objective_pressure
+    if force_double:
+        return _aggress(data, 1.0, shove=True)
     if equity >= strong + uncertainty:
         base = 0.55 if data.get("round") == "post_reveal" else 0.42
         return _aggress(
@@ -545,6 +575,7 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         opponents = cached["opponents"]
         showdown_safety = cached["showdown_safety"]
         objective_pressure = cached["objective_pressure"]
+        force_double = cached["force_double"]
     else:
         model = RULES.model_for(data)
         profiles = OPPONENTS.ingest(data)
@@ -552,6 +583,7 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
             data, model, profiles
         )
         objective_pressure = _objective_pressure(data)
+        force_double = _force_double(data, equity, showdown_safety)
     hero = _hero(data)
     info = model.diagnostics()
     leader = max((int(player.get("chip_delta", -200)) for player in _opponents(data)), default=-200)
@@ -574,6 +606,7 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         "showdown_safety": round(showdown_safety, 4),
         "confidence": round(confidence, 4),
         "objective_pressure": round(objective_pressure, 4),
+        "force_double": force_double,
         "observations": info["observations"],
         "hypothesis": info["best_hypothesis"],
         "action": action,

@@ -9,6 +9,7 @@ from bot import (
     OPPONENTS,
     _amount,
     _future_forced_cost,
+    _force_double,
     _is_clearing,
     _multiway_equity,
     _objective_pressure,
@@ -298,6 +299,44 @@ class Phase3BotTests(unittest.TestCase):
         self.assertEqual(modest_action["action"], "bet")
         self.assertEqual(urgent_action["action"], "bet")
         self.assertGreater(urgent_action["amount"], modest_action["amount"])
+
+    def test_late_unreachable_gap_forces_double_with_strong_single(self):
+        data = request(
+            table_rule="obsidian",
+            hand_number=57,
+            round="post_reveal",
+            your_number=2,
+            community_number=6,
+            your_stack=276,
+            pot=12,
+            min_raise_to=4,
+            max_raise_to=276,
+            legal_actions=["check", "bet"],
+            players=players(76, [-200, 724, -200, -200, -200]),
+        )
+        with patch("bot._multiway_equity", return_value=(0.927, 0.999, 1, 0.968)):
+            action = decide(data)
+        self.assertTrue(_force_double(data, 0.927, 0.968))
+        self.assertEqual(action, {"action": "bet", "amount": 276})
+
+    def test_early_gap_does_not_force_premature_all_in(self):
+        data = request(
+            hand_number=4,
+            round="post_reveal",
+            your_number=12,
+            community_number=12,
+            your_stack=200,
+            pot=12,
+            min_raise_to=4,
+            max_raise_to=200,
+            legal_actions=["check", "bet"],
+            players=players(0, [406, -100, -100, -100, -106]),
+        )
+        with patch("bot._multiway_equity", return_value=(0.968, 0.95, 1, 0.999)):
+            action = decide(data)
+        self.assertFalse(_force_double(data, 0.968, 0.999))
+        self.assertEqual(action["action"], "bet")
+        self.assertLess(action["amount"], 200)
 
     def test_forced_cost_skips_busted_seats(self):
         full = request(hand_number=59, button_seat=4)
