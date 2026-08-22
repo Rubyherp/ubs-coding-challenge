@@ -21,10 +21,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self.path.rstrip("/") == "/health":
+        if self.path.rstrip("/") in ("", "/health"):
             self._json(200, {"status": "ok"})
         else:
             self._json(404, {"error": "not found"})
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        status = 200 if self.path.rstrip("/") in ("", "/health") else 404
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
