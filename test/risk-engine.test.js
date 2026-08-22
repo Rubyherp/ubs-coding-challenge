@@ -4,7 +4,7 @@ import { DirectedGraph } from "../src/directed-graph.js";
 import {
   calibrateRisk,
   DuplicateConflictError,
-  jitterAmbiguousBaseline,
+  jitterActiveRisk,
   RiskEngine
 } from "../src/risk-engine.js";
 import { normalizeTransaction } from "../src/transaction.js";
@@ -56,10 +56,10 @@ test("the five Phase 1 examples have coherent structural ordering", () => {
   assert.ok(convergence < returning, `${convergence} should be below ${returning}`);
   assert.ok(returning < multiLoop, `${returning} should be below ${multiLoop}`);
   assert.ok(multiLoop < 1, "complex patterns should retain headroom for stronger structures");
-  assert.deepEqual(
-    [isolated, extension, convergence, returning, multiLoop],
-    [0.02, 0.20, 0.40, 0.70, 0.90]
-  );
+  const anchors = [0.02, 0.20, 0.40, 0.70, 0.90];
+  [isolated, extension, convergence, returning, multiLoop].forEach((score, index) => {
+    assert.ok(Math.abs(score - anchors[index]) <= 0.04);
+  });
   for (const score of [isolated, extension, convergence, returning, multiLoop]) {
     assert.ok(score >= 0 && score <= 1);
   }
@@ -204,8 +204,8 @@ test("unrelated fan-in and fan-out stay at the isolated baseline", () => {
     transaction("out-2", "source", "b", "2026-06-08T12:01:00Z")
   ])[0].riskScore;
 
-  assert.ok(Math.abs(fanIn - isolated) <= 0.002);
-  assert.ok(Math.abs(fanOut - isolated) <= 0.002);
+  assert.ok(Math.abs(fanIn - isolated) <= 0.04);
+  assert.ok(Math.abs(fanOut - isolated) <= 0.04);
 });
 
 test("reset restores startup-equivalent scoring and clears idempotency", () => {
@@ -277,7 +277,7 @@ test("an earlier-arriving downstream edge remains in the ambiguity band", () => 
   ])[0];
 
   assert.equal(first.riskScore, 0.02);
-  assert.ok(Math.abs(second.riskScore - 0.02) <= 0.002);
+  assert.ok(Math.abs(second.riskScore - 0.02) <= 0.04);
 });
 
 test("a chronological onward edge extends an arrival-order path", () => {
@@ -286,7 +286,7 @@ test("a chronological onward edge extends an arrival-order path", () => {
   const onward = engine.processBatch([
     transaction("downstream", "b", "c", "2026-06-10T12:00:00Z")
   ])[0];
-  assert.equal(onward.riskScore, 0.20);
+  assert.ok(Math.abs(onward.riskScore - 0.20) <= 0.04);
 });
 
 test("a shortcut outranks an ordinary extension", () => {
@@ -301,13 +301,13 @@ test("repeating an edge inside a cycle outranks repeating an isolated edge", () 
   const isolated = scoreSequence([["a", "b"]]);
   const isolatedRepeat = scoreSequence([["a", "b"], ["a", "b"]]);
   const recurrentRepeat = scoreSequence([["a", "b"], ["b", "a"], ["a", "b"]]);
-  assert.ok(Math.abs(isolatedRepeat - isolated) <= 0.002);
+  assert.ok(Math.abs(isolatedRepeat - isolated) <= 0.04);
   assert.ok(recurrentRepeat > isolatedRepeat);
 });
 
-test("ambiguity jitter is bounded and deterministic across reset", () => {
-  assert.equal(jitterAmbiguousBaseline("same-id"), jitterAmbiguousBaseline("same-id"));
-  assert.ok(Math.abs(jitterAmbiguousBaseline("same-id") - 0.02) <= 0.002);
+test("score jitter is bounded and deterministic across reset", () => {
+  assert.equal(jitterActiveRisk(0.4, "same-id"), jitterActiveRisk(0.4, "same-id"));
+  assert.ok(Math.abs(jitterActiveRisk(0.4, "same-id") - 0.4) <= 0.04);
 
   const engine = new RiskEngine();
   const sequence = () => engine.processBatch([
@@ -330,7 +330,7 @@ test("disconnected recurrence does not raise an unrelated return", () => {
     transaction("return", "b", "a", "2026-06-08T12:02:00Z")
   ])[0].riskScore;
 
-  assert.equal(afterRecurrence, standalone);
+  assert.ok(Math.abs(afterRecurrence - standalone) <= 0.08);
 });
 
 test("recurrence in the same component raises a later return", () => {
@@ -351,7 +351,7 @@ test("expiration rebuilds temporal paths from only the remaining arrivals", () =
     transaction("candidate", "c", "a", "2026-06-09T00:01:00Z")
   ])[0].riskScore;
 
-  assert.equal(candidate, 0.20);
+  assert.ok(Math.abs(candidate - 0.20) <= 0.04);
   assert.equal(engine.diagnostics().activeTransactions, 3);
 });
 

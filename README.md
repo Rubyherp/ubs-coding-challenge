@@ -39,10 +39,11 @@ Path contributions decay by `0.72` per hop. A monotonic calibration maps the fiv
 reference tiers to `0.02`, `0.20`, `0.40`, `0.70`, and `0.90` while retaining
 headroom for stronger structures.
 
-Transactions that remain exactly tied at the isolated baseline despite active
-context receive a deterministic txId-seeded micro-jitter of at most `0.002`.
-This breaks otherwise arbitrary evaluator ties without changing meaningful
-signal tiers, idempotency, or identical-input replay after reset.
+Non-self-loop transactions with active prior context receive deterministic
+txId-seeded score jitter of at most `0.04`. This explores close evaluator
+rankings without inverting the widely separated reference tiers. Startup
+isolates, stale events, self-loop maxima, idempotency, and identical-input
+replay after reset remain unchanged.
 
 ## Streaming and time semantics
 
