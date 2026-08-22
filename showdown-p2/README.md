@@ -27,6 +27,11 @@ name, while shown-number ranges remain leg-local because hand strength changes
 with the table rule. All mutable state is thread-safe and bounded. Duplicate
 requests and overlapping `recent_hands` windows do not double-count evidence.
 
+Observed showdowns from completed event attempts are retained as startup
+evidence for the event's stable codenames, so a deployment restart does not
+erase everything learned from earlier retries. The server also emits compact
+decision diagnostics to Render logs without changing protocol responses.
+
 The end-game lock targets the Phase 2 threshold of `+25` per leg and reserves
 every forced bet still payable, rather than reusing Phase 1's `+10` target.
 

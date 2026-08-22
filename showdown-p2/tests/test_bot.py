@@ -10,6 +10,7 @@ from bot import (
     _can_lock_clear,
     _reset_learning_for_tests,
     decide,
+    decision_diagnostics,
 )
 from rule_model import RULES
 
@@ -19,7 +20,7 @@ def request(**overrides):
         "protocol_version": 2,
         "match_id": "test-match",
         "phase": 2,
-        "table_rule": "obsidian",
+        "table_rule": "test-opaque",
         "leg_number": 1,
         "total_legs": 4,
         "small_blind": 1,
@@ -122,6 +123,45 @@ class BotTests(unittest.TestCase):
         data["your_number"] = 13
         self.assertEqual(decide(data), {"action": "check"})
 
+    def test_event_rule_evidence_survives_a_fresh_process_model(self):
+        verdigris = request(table_rule="verdigris")
+        obsidian = request(table_rule="obsidian")
+        high_model = RULES.model_for(verdigris)
+        low_model = RULES.model_for(obsidian)
+        self.assertEqual(high_model.diagnostics()["best_hypothesis"], "top:high")
+        self.assertEqual(low_model.diagnostics()["best_hypothesis"], "bottom:low")
+        self.assertGreater(high_model.observation_count, 20)
+        self.assertGreater(low_model.equity(1, 5)[0], low_model.equity(13, 5)[0])
+
+    def test_verdigris_weak_hand_folds_to_post_reveal_value_bet(self):
+        data = request(
+            table_rule="verdigris",
+            round="post_reveal",
+            your_number=4,
+            community_number=12,
+            pot=17,
+            to_call=7,
+            min_raise_to=14,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "post_reveal", "seat": 0, "action": "check"},
+                {"round": "post_reveal", "seat": 1, "action": "bet", "amount": 7},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
+    def test_obsidian_low_non_pair_value_bets_immediately(self):
+        data = request(
+            table_rule="obsidian",
+            round="post_reveal",
+            your_number=1,
+            community_number=5,
+            pot=10,
+            min_raise_to=2,
+            legal_actions=["check", "bet"],
+        )
+        self.assertEqual(decide(data)["action"], "bet")
+
     def test_learning_survives_leg_reset_and_isolated_by_codename(self):
         first_leg = request(
             match_id="leg-one",
@@ -153,6 +193,14 @@ class BotTests(unittest.TestCase):
         second = decide(data)
         self.assertEqual(first, second)
         self.assertEqual(RULES.model_for(data).observation_count, 1)
+
+    def test_decision_diagnostics_are_protocol_safe_and_serializable(self):
+        data = request(table_rule="verdigris")
+        action = decide(data)
+        diagnostics = decision_diagnostics(data, action)
+        self.assertEqual(diagnostics["action"], action)
+        self.assertEqual(diagnostics["rule"], "verdigris")
+        self.assertIsInstance(diagnostics["equity"], float)
 
     def test_tied_showdown_is_recorded_as_half_equity(self):
         data = request(

@@ -121,6 +121,51 @@ def _hypotheses() -> tuple[Hypothesis, ...]:
 HYPOTHESES = _hypotheses()
 
 
+# Revealed showdowns from our own completed Phase 2 attempt.  The challenge
+# explicitly guarantees that a codename keeps the same ruleset across retries,
+# so retaining this public match evidence avoids relearning from zero after a
+# deploy restart.  Each tuple is (our number, opponent number, community,
+# outcome from our perspective).  Folded hands are intentionally absent.
+EVENT_OBSERVATIONS: Dict[str, tuple[tuple[int, int, int, int], ...]] = {
+    "verdigris": (
+        (9, 6, 6, -1), (4, 9, 12, -1), (10, 11, 7, -1),
+        (7, 3, 9, 1), (6, 13, 9, -1), (4, 13, 7, -1),
+        (6, 13, 10, -1), (2, 9, 6, -1), (10, 9, 9, -1),
+        (10, 10, 9, 0), (12, 12, 8, 0), (9, 13, 11, -1),
+        (8, 1, 2, 1), (11, 12, 1, -1), (5, 8, 4, -1),
+        (5, 6, 12, -1), (11, 13, 6, -1), (10, 9, 5, 1),
+        (9, 13, 5, -1), (9, 8, 3, 1), (10, 10, 3, 0),
+        (4, 7, 6, -1), (6, 10, 9, -1), (9, 11, 10, -1),
+        (7, 6, 4, 1), (4, 4, 6, 0), (10, 11, 13, -1),
+    ),
+    "cinnabar": (
+        (10, 3, 9, 1), (4, 8, 12, -1), (7, 9, 12, -1),
+        (4, 5, 12, -1), (5, 10, 3, -1), (5, 5, 6, 0),
+        (13, 10, 13, 1), (6, 13, 9, -1), (9, 10, 4, -1),
+        (7, 2, 2, -1), (5, 1, 9, 1), (13, 13, 6, 0),
+        (6, 6, 4, 0), (6, 11, 12, -1), (12, 9, 10, 1),
+        (4, 3, 9, 1), (6, 6, 1, 0), (11, 13, 13, -1),
+    ),
+    "amaranth": (
+        (4, 12, 4, 1), (11, 9, 12, 1), (1, 7, 2, -1),
+        (12, 7, 8, -1), (8, 11, 3, -1), (8, 1, 4, 1),
+        (6, 8, 13, -1), (11, 5, 5, -1), (7, 6, 2, 1),
+        (10, 8, 5, 1), (9, 9, 5, 0), (11, 8, 3, 1),
+        (7, 10, 4, 1), (12, 10, 9, 1), (13, 9, 11, 1),
+        (6, 9, 2, -1), (13, 7, 10, -1), (7, 12, 3, 1),
+        (12, 11, 4, 1),
+    ),
+    "obsidian": (
+        (2, 4, 3, 1), (3, 8, 9, 1), (8, 6, 6, 1),
+        (12, 4, 5, -1), (9, 5, 5, 1), (4, 3, 9, -1),
+        (3, 7, 12, 1), (4, 5, 6, 1), (7, 2, 12, -1),
+        (8, 5, 10, -1), (9, 11, 8, 1), (10, 13, 13, 1),
+        (8, 6, 6, 1), (6, 12, 5, 1), (10, 8, 3, -1),
+        (1, 7, 5, 1),
+    ),
+}
+
+
 def _result_value(outcome: int) -> float:
     if outcome > 0:
         return 1.0
@@ -284,7 +329,13 @@ class RuleRegistry:
     def model_for(self, data: Dict[str, Any]) -> RuleModel:
         name = self._rule_name(data)
         with self._lock:
-            return self._models.setdefault(name, RuleModel())
+            model = self._models.get(name)
+            if model is None:
+                model = RuleModel()
+                for index, observation in enumerate(EVENT_OBSERVATIONS.get(name, ())):
+                    model.observe(("event-seed", name, index), *observation)
+                self._models[name] = model
+            return model
 
     def ingest(self, data: Dict[str, Any]) -> RuleModel:
         model = self.model_for(data)

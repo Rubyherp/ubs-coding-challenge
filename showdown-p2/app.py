@@ -6,7 +6,7 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from bot import decide
+from bot import decide, decision_diagnostics
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -43,7 +43,20 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError("request body must be an object")
-            self._json(200, decide(payload))
+            action = decide(payload)
+            try:
+                print(
+                    json.dumps(
+                        decision_diagnostics(payload, action),
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+            except Exception:
+                # Observability must never turn a legal move into a failed move.
+                pass
+            self._json(200, action)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self._json(400, {"error": str(exc)})
         except Exception:

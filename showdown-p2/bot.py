@@ -219,13 +219,18 @@ def _estimated_equity(
         data, model, number, community, signal
     )
     if observed is not None:
-        weight = min(0.48, sample_count / 18.0)
+        # The replayed opponent's aggressive showdowns were heavily
+        # value-weighted.  Converge after a few observations instead of leaving
+        # more than half the estimate anchored to a uniform opponent forever.
+        weight = min(0.78, sample_count / (sample_count + 2.5))
         base = base * (1.0 - weight) + observed * weight
 
     if signal == "aggressive":
-        # A frequent aggressor has a wider betting range.  Very large bets still
-        # get a small caution adjustment independent of the inferred rule.
-        base += (stats["aggression"] - 0.29) * 0.18
+        # Frequency is weak evidence about range width once actual shown ranks
+        # exist.  The old adjustment overwhelmed those ranks and produced the
+        # repeated losing calls visible in verdigris.
+        tendency_weight = 1.0 / (1.0 + sample_count / 3.0)
+        base += (stats["aggression"] - 0.29) * 0.08 * tendency_weight
         pot = max(1.0, float(data.get("pot", 0)))
         to_call = float(data.get("to_call", 0))
         size_ratio = to_call / max(1.0, pot - to_call)
@@ -341,6 +346,7 @@ def decide(data: Dict[str, Any]) -> Action:
         stack = max(1, int(data.get("your_stack", 1)))
         pot_odds = to_call / max(1.0, pot + to_call)
         risk_premium = 0.035 + 0.11 * (to_call / stack)
+        risk_premium += 0.09 * (1.0 - confidence)
         if delta >= target and hands_left <= 12:
             risk_premium += 0.07
         risk_premium -= min(0.06, catch_up * 0.08)
@@ -348,14 +354,14 @@ def decide(data: Dict[str, Any]) -> Action:
         # Cheap early calls buy showdown evidence.  The cap prevents learning
         # from becoming an excuse to pay large, dominated bets.
         cheap_probe = (
-            observations < 7
-            and hand <= 14
+            observations < 4
+            and hand <= 8
             and "call" in legal
             and to_call <= max(2, min(6, round(pot * 0.20)))
             and to_call <= stack * 0.04
         )
         if cheap_probe:
-            risk_premium -= 0.075 * (1.0 - confidence)
+            risk_premium -= 0.04 * (1.0 - confidence)
 
         value_raise = 0.80 if round_name == "post_reveal" else 0.84
         value_raise += 0.04 * (1.0 - confidence)
@@ -393,6 +399,34 @@ def decide(data: Dict[str, Any]) -> Action:
     if equity <= 0.30 and _roll(data, "post-bluff") < bluff_rate:
         return _aggress(data, 0.42)
     return _safe_exit(data)
+
+
+def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]:
+    """Small structured record for production replay/debug correlation."""
+
+    model = RULES.model_for(data)
+    profile = OPPONENTS.ingest(data)
+    equity, confidence = _estimated_equity(data, model, profile.stats())
+    model_info = model.diagnostics()
+    hero, _ = _players(data)
+    return {
+        "event": "showdown_decision",
+        "match_id": str(data.get("match_id", "")),
+        "leg": data.get("leg_number"),
+        "hand": data.get("hand_number"),
+        "round": data.get("round"),
+        "rule": data.get("table_rule"),
+        "number": data.get("your_number"),
+        "community": data.get("community_number"),
+        "delta": hero.get("chip_delta"),
+        "pot": data.get("pot"),
+        "to_call": data.get("to_call"),
+        "equity": round(equity, 4),
+        "confidence": round(confidence, 4),
+        "observations": model_info["observations"],
+        "hypothesis": model_info["best_hypothesis"],
+        "action": action,
+    }
 
 
 def _reset_learning_for_tests() -> None:
