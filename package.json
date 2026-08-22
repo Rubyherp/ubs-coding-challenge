@@ -1,0 +1,15 @@
+{
+  "name": "ubs-coding-challenge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Repository entry point for the Ghost Chains challenge",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "npm --prefix ghost-chains start",
+    "test": "npm --prefix ghost-chains test",
+    "check": "npm --prefix ghost-chains run check",
+    "test:coverage": "npm --prefix ghost-chains run test:coverage"
+  }
+}
