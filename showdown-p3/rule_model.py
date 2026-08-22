@@ -248,6 +248,18 @@ class RuleModel:
                 "best_probability": weights[best],
             }
 
+    def pair_mode_probability(self, mode: str) -> float:
+        """Posterior probability that matching the community has ``mode`` rank."""
+
+        if mode not in ("top", "bottom", "none"):
+            return 0.0
+        with self._lock:
+            return sum(
+                weight
+                for weight, hypothesis in zip(self._weights(), HYPOTHESES)
+                if hypothesis.pair_mode == mode
+            )
+
 
 class RuleRegistry:
     def __init__(self) -> None:

@@ -319,25 +319,19 @@ def _value_fraction(
     return fraction
 
 
-def _force_double(
-    data: Dict[str, Any], equity: float, showdown_safety: float
+def _pair_draw_call(
+    data: Dict[str, Any], pair_top_probability: float, objective_pressure: float
 ) -> bool:
-    """Whether normal pot growth can no longer plausibly reach first place."""
+    """Buy a cheap reveal when the community can turn any single into the nuts."""
 
-    if data.get("round") != "post_reveal" or _is_clearing(data):
+    if data.get("round") != "pre_reveal" or pair_top_probability < 0.85:
         return False
-    pressure = _objective_pressure(data)
-    if pressure < 0.88 or equity < 0.68 or showdown_safety < 0.80:
+    if _is_clearing(data) or "call" not in set(data.get("legal_actions") or []):
         return False
-    delta = int(_hero(data).get("chip_delta", 0))
-    gap = _objective_target(data) - delta
+    to_call = max(0, int(data.get("to_call", 0)))
     stack = max(1, int(data.get("your_stack", 1)))
-    hand = max(1, int(data.get("hand_number", 1)))
-    total = max(hand, int(data.get("total_hands", 60)))
-    hands_remaining = total - hand + 1
-    pot = max(1, int(data.get("pot", 1)))
-    ordinary_capacity = hands_remaining * max(8, 2 * pot)
-    return gap > max(round(0.75 * stack), ordinary_capacity)
+    cap = max(2, round(stack * (0.05 + 0.03 * objective_pressure)))
+    return 0 < to_call <= cap and _aggression_count(data, _last_aggressor(data)) <= 1
 
 
 def _future_forced_cost(data: Dict[str, Any]) -> int:
@@ -421,14 +415,14 @@ def _safe_exit(data: Dict[str, Any]) -> Action:
     return _fallback(data)
 
 
-def _aggress(data: Dict[str, Any], fraction: float, *, shove: bool = False) -> Action:
+def _aggress(data: Dict[str, Any], fraction: float) -> Action:
     legal = set(data.get("legal_actions") or [])
     preferred = "raise" if int(data.get("to_call", 0)) > 0 else "bet"
     for kind in (preferred, "raise", "bet"):
         if kind in legal:
             return {
                 "action": kind,
-                "amount": _amount(data, 1_000.0 if shove else fraction),
+                "amount": _amount(data, fraction),
             }
     return {"action": "call"} if "call" in legal else _fallback(data)
 
@@ -451,7 +445,16 @@ def decide(data: Dict[str, Any]) -> Action:
     target = _objective_target(data)
     protecting = delta >= target
     objective_pressure = _objective_pressure(data)
-    force_double = _force_double(data, equity, showdown_safety)
+    pair_top_probability = model.pair_mode_probability("top")
+    nut_pair = (
+        data.get("round") == "post_reveal"
+        and data.get("community_number") is not None
+        and int(data.get("your_number", 0)) == int(data["community_number"])
+        and pair_top_probability >= 0.85
+    )
+    pair_draw_call = _pair_draw_call(
+        data, pair_top_probability, objective_pressure
+    )
     hand = int(data.get("hand_number", 1))
     total = int(data.get("total_hands", 60))
     hands_left = max(0, total - hand)
@@ -465,7 +468,9 @@ def decide(data: Dict[str, Any]) -> Action:
         "opponents": opponent_count,
         "showdown_safety": showdown_safety,
         "objective_pressure": objective_pressure,
-        "force_double": force_double,
+        "pair_top_probability": pair_top_probability,
+        "pair_draw_call": pair_draw_call,
+        "nut_pair": nut_pair,
     }
 
     if to_call > 0:
@@ -501,8 +506,13 @@ def decide(data: Dict[str, Any]) -> Action:
                 risk -= 0.025 * objective_pressure
 
         severe = aggression_count >= 2 or to_call >= max(25, round(stack * 0.30))
-        if force_double and ("raise" in legal or "bet" in legal):
-            return _aggress(data, 1.0, shove=True)
+        if nut_pair:
+            if "raise" in legal or "bet" in legal:
+                return _aggress(data, 1.50)
+            if "call" in legal:
+                return {"action": "call"}
+        if pair_draw_call:
+            return {"action": "call"}
         if severe:
             profitable = equity + 1e-9 >= pot_odds + max(0.0, risk)
             safe_split = (
@@ -537,8 +547,8 @@ def decide(data: Dict[str, Any]) -> Action:
     uncertainty = 0.05 * (1.0 - confidence)
     strong -= 0.12 * objective_pressure
     medium -= 0.10 * objective_pressure
-    if force_double:
-        return _aggress(data, 1.0, shove=True)
+    if nut_pair:
+        return _aggress(data, 0.70 + 0.25 * objective_pressure)
     if equity >= strong + uncertainty:
         base = 0.55 if data.get("round") == "post_reveal" else 0.42
         return _aggress(
@@ -575,7 +585,9 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         opponents = cached["opponents"]
         showdown_safety = cached["showdown_safety"]
         objective_pressure = cached["objective_pressure"]
-        force_double = cached["force_double"]
+        pair_top_probability = cached["pair_top_probability"]
+        pair_draw_call = cached["pair_draw_call"]
+        nut_pair = cached["nut_pair"]
     else:
         model = RULES.model_for(data)
         profiles = OPPONENTS.ingest(data)
@@ -583,7 +595,16 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
             data, model, profiles
         )
         objective_pressure = _objective_pressure(data)
-        force_double = _force_double(data, equity, showdown_safety)
+        pair_top_probability = model.pair_mode_probability("top")
+        nut_pair = (
+            data.get("round") == "post_reveal"
+            and data.get("community_number") is not None
+            and int(data.get("your_number", 0)) == int(data["community_number"])
+            and pair_top_probability >= 0.85
+        )
+        pair_draw_call = _pair_draw_call(
+            data, pair_top_probability, objective_pressure
+        )
     hero = _hero(data)
     info = model.diagnostics()
     leader = max((int(player.get("chip_delta", -200)) for player in _opponents(data)), default=-200)
@@ -606,7 +627,9 @@ def decision_diagnostics(data: Dict[str, Any], action: Action) -> Dict[str, Any]
         "showdown_safety": round(showdown_safety, 4),
         "confidence": round(confidence, 4),
         "objective_pressure": round(objective_pressure, 4),
-        "force_double": force_double,
+        "pair_top_probability": round(pair_top_probability, 4),
+        "pair_draw_call": pair_draw_call,
+        "nut_pair": nut_pair,
         "observations": info["observations"],
         "hypothesis": info["best_hypothesis"],
         "action": action,

@@ -28,9 +28,10 @@ the leader gap, elapsed hands, and shrinking field; this lowers value thresholds
 and increases bet sizes because a safe third-place finish scores the same as a
 bust-out. Large reraises are evaluated with pot odds and the probability that no
 opponent can beat the hand, so dominant hands and profitable split pots are not
-discarded by a blanket stack-risk cutoff. If the remaining ordinary pots cannot
-plausibly close the first-place gap, a high-confidence post-reveal edge switches
-to forced-double sizing instead of accepting a zero-point finish with chips left.
+discarded by a blanket stack-risk cutoff. In pair-top rules, cheap pre-reveal
+calls retain the option for any single to become the top hand; once that pair
+lands, committed opponents are raised for value. Unopened nut pairs use a
+callable value size rather than an ineffective full-stack bet into a tiny pot.
 
 ## Run and test
 

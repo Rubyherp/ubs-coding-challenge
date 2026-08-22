@@ -9,7 +9,6 @@ from bot import (
     OPPONENTS,
     _amount,
     _future_forced_cost,
-    _force_double,
     _is_clearing,
     _multiway_equity,
     _objective_pressure,
@@ -232,7 +231,7 @@ class Phase3BotTests(unittest.TestCase):
         )
         self.assertNotEqual(decide(data)["action"], "raise")
 
-    def test_dominant_pair_calls_large_reraise_at_profitable_odds(self):
+    def test_dominant_pair_value_raises_large_reraise(self):
         seats = players(-3, [159, -38, -200, 173, -91])
         seats[3]["busted"] = True
         data = request(
@@ -255,7 +254,7 @@ class Phase3BotTests(unittest.TestCase):
                 {"round": "post_reveal", "seat": 5, "action": "call", "amount": 74},
             ],
         )
-        self.assertEqual(decide(data), {"action": "call"})
+        self.assertEqual(decide(data), {"action": "raise", "amount": 178})
 
     def test_objective_pressure_rises_with_gap_and_time(self):
         early = request(
@@ -300,43 +299,67 @@ class Phase3BotTests(unittest.TestCase):
         self.assertEqual(urgent_action["action"], "bet")
         self.assertGreater(urgent_action["amount"], modest_action["amount"])
 
-    def test_late_unreachable_gap_forces_double_with_strong_single(self):
+    def test_cheap_pair_draw_calls_before_reveal(self):
+        data = request(
+            table_rule="verdigris",
+            your_number=1,
+            your_stack=200,
+            pot=14,
+            to_call=9,
+            min_raise_to=18,
+            max_raise_to=200,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "pre_reveal", "seat": 5, "action": "raise", "amount": 9},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "call"})
+
+    def test_pair_draw_does_not_chase_large_reraise(self):
+        data = request(
+            table_rule="verdigris",
+            your_number=4,
+            your_stack=200,
+            pot=45,
+            to_call=20,
+            min_raise_to=36,
+            max_raise_to=200,
+            legal_actions=["fold", "call", "raise"],
+            current_hand_actions=[
+                {"round": "pre_reveal", "seat": 3, "action": "raise", "amount": 6},
+                {"round": "pre_reveal", "seat": 5, "action": "raise", "amount": 21},
+            ],
+        )
+        self.assertEqual(decide(data), {"action": "fold"})
+
+    def test_landed_top_pair_raises_committed_opponents(self):
+        data = request(
+            table_rule="cinnabar",
+            round="post_reveal",
+            your_number=5,
+            community_number=5,
+            your_stack=178,
+            pot=194,
+            to_call=55,
+            min_raise_to=129,
+            max_raise_to=178,
+            legal_actions=["fold", "call", "raise"],
+        )
+        self.assertEqual(decide(data), {"action": "raise", "amount": 178})
+
+    def test_obsidian_pair_never_uses_top_pair_override(self):
         data = request(
             table_rule="obsidian",
-            hand_number=57,
             round="post_reveal",
-            your_number=2,
-            community_number=6,
-            your_stack=276,
+            your_number=7,
+            community_number=7,
             pot=12,
-            min_raise_to=4,
-            max_raise_to=276,
             legal_actions=["check", "bet"],
-            players=players(76, [-200, 724, -200, -200, -200]),
         )
-        with patch("bot._multiway_equity", return_value=(0.927, 0.999, 1, 0.968)):
-            action = decide(data)
-        self.assertTrue(_force_double(data, 0.927, 0.968))
-        self.assertEqual(action, {"action": "bet", "amount": 276})
-
-    def test_early_gap_does_not_force_premature_all_in(self):
-        data = request(
-            hand_number=4,
-            round="post_reveal",
-            your_number=12,
-            community_number=12,
-            your_stack=200,
-            pot=12,
-            min_raise_to=4,
-            max_raise_to=200,
-            legal_actions=["check", "bet"],
-            players=players(0, [406, -100, -100, -100, -106]),
-        )
-        with patch("bot._multiway_equity", return_value=(0.968, 0.95, 1, 0.999)):
-            action = decide(data)
-        self.assertFalse(_force_double(data, 0.968, 0.999))
-        self.assertEqual(action["action"], "bet")
-        self.assertLess(action["amount"], 200)
+        action = decide(data)
+        diagnostics = decision_diagnostics(data, action)
+        self.assertFalse(diagnostics["nut_pair"])
+        self.assertLess(diagnostics["pair_top_probability"], 0.01)
 
     def test_forced_cost_skips_busted_seats(self):
         full = request(hand_number=59, button_seat=4)
