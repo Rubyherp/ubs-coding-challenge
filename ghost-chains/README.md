@@ -1,4 +1,4 @@
-# Ghost Chains — Phase 1
+# Ghost Chains — Phase 2
 
 A dependency-free Node.js service that assigns streaming AML risk scores from the evolving structure of a directed transaction graph.
 
@@ -44,6 +44,22 @@ txId-seeded score jitter of at most `0.04`. This explores close evaluator
 rankings without inverting the widely separated reference tiers. Startup
 isolates, stale events, self-loop maxima, idempotency, and identical-input
 replay after reset remain unchanged.
+
+## Identity model
+
+`ipAddress` and `deviceId` are evaluated as independent evidence dimensions
+inside the same active 24-hour window. For each new transaction, the engine:
+
+- compares identity with the prior active legs ending at the sender, detecting
+  agreement, a mid-flow shift, or identity disappearance;
+- detects reuse of the same identity in distinct weakly connected components,
+  counting components rather than raw transaction frequency; and
+- combines identity hazard with structural risk using bounded hazard
+  composition, so identity-free Phase 1 scores are unchanged.
+
+Agreement adds only modest evidence, while shifts and disappearance on a
+continuous path are stronger. Cross-component reuse is deliberately weak on
+its own because shared Wi-Fi and network aggregation can be legitimate.
 
 ## Streaming and time semantics
 
